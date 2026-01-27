@@ -63,6 +63,8 @@ class AuthManager
             'password_hash' => password_hash($password, PASSWORD_ARGON2ID),
             'encryption_key' => $userKey,
             'auth_token' => $authResult['token'],
+            'device_hash' => $deviceHash,
+            'device_hash_v2' => $deviceHashV2,
             'created_at' => date('c')
         ];
 
@@ -127,12 +129,26 @@ class AuthManager
             return false;
         }
 
-        $result = MijAuth::verifyAuthFileWithToken(
-            $fileContent,
-            $user['encryption_key'],
-            $user['auth_token'],
-            $user['id']
-        );
+        $deviceHash = $user['device_hash'] ?? null;
+        $deviceHashV2 = $user['device_hash_v2'] ?? null;
+
+        if ($deviceHash !== null || $deviceHashV2 !== null) {
+            $result = MijAuth::verifyAuthFileWithTokenAndDevice(
+                $fileContent,
+                $user['encryption_key'],
+                $user['auth_token'],
+                $user['id'],
+                $deviceHash,
+                $deviceHashV2
+            );
+        } else {
+            $result = MijAuth::verifyAuthFileWithToken(
+                $fileContent,
+                $user['encryption_key'],
+                $user['auth_token'],
+                $user['id']
+            );
+        }
 
         $this->logAttempt('auth_file_verification', $result, [
             'user_id' => $user['id'],
@@ -206,6 +222,12 @@ class AuthManager
         );
 
         $this->storage->updateAuthToken($userId, $authResult['token']);
+
+        if ($deviceHash !== null || $deviceHashV2 !== null) {
+            $user['device_hash'] = $deviceHash;
+            $user['device_hash_v2'] = $deviceHashV2;
+            $this->storage->save($userId, $user);
+        }
 
         return $authResult['file_content'];
     }
