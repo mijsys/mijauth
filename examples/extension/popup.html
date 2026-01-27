@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MijAuth Helper</title>
+  <style>
+    body { font-family: Arial, sans-serif; width: 320px; padding: 12px; }
+    h1 { font-size: 16px; margin: 0 0 8px; }
+    button { padding: 6px 10px; margin-right: 6px; border: none; border-radius: 6px; cursor: pointer; background: #2563eb; color: #fff; }
+    button.secondary { background: #6b7280; }
+    .status { margin: 8px 0; font-size: 12px; }
+    .muted { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>MijAuth Helper</h1>
+  <div class="status">Status: <span id="status">Idle</span></div>
+  <input type="file" id="fileInput" accept=".mijauth" />
+  <div style="margin-top: 8px;">
+    <button id="saveBtn">Save</button>
+    <button id="fingerprintBtn" class="secondary">Fetch Fingerprint</button>
+  </div>
+  <div class="status muted" id="details"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

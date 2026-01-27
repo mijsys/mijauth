@@ -54,7 +54,8 @@ class MijAuth
      * 
      * @param string $userId User identifier
      * @param string $userKeyBase64 User's encryption key in base64
-     * @param string|null $deviceHash Optional device fingerprint hash
+        * @param string|null $deviceHash Optional device fingerprint hash (v1)
+        * @param string|null $deviceHashV2 Optional device fingerprint hash (v2)
      * @return array{file_content: string, token: string}
      * @throws RuntimeException|JsonException
      */
@@ -193,7 +194,8 @@ class MijAuth
      * 
      * @param string $userId User identifier
      * @param string $userKeyBase64 User's encryption key in base64
-     * @param string|null $deviceHash Optional device fingerprint hash
+        * @param string|null $deviceHash Optional device fingerprint hash (v1)
+        * @param string|null $deviceHashV2 Optional device fingerprint hash (v2)
      * @return array{file_content: string, token: string}
      */
     public static function regenerateAuthFile(

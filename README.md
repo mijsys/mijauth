@@ -39,6 +39,7 @@ The file contains JSON data, encrypted with AES-256-GCM:
   "token": "random-256-bit-token",
   "created_at": "2024-01-01T00:00:00Z",
   "device_hash": "optional-device-fingerprint",
+    "device_hash_v2": "optional-device-fingerprint-v2",
   "version": 1
 }
 ```
@@ -128,6 +129,24 @@ cd examples/flutter
 flutter pub get
 flutter run
 ```
+
+#### PWA (File System Access)
+```bash
+cd examples/pwa
+npx serve .
+```
+
+#### Browser Extension (Edge/Firefox)
+See [examples/extension/README.md](examples/extension/README.md)
+
+#### Desktop Helper (Electron)
+```bash
+cd examples/desktop-helper
+npm install
+npm start
+```
+
+Helper exposes `http://127.0.0.1:7331/fingerprint` for signed device hash.
 
 #### Flutter
 ```bash
@@ -320,6 +339,7 @@ Plik zawiera dane w formacie JSON, zaszyfrowane AES-256-GCM:
   "token": "losowy-256-bitowy-token",
   "created_at": "2024-01-01T00:00:00Z",
   "device_hash": "opcjonalny-odcisk-urządzenia",
+    "device_hash_v2": "opcjonalny-odcisk-urządzenia-v2",
   "version": 1
 }
 ```
@@ -572,6 +592,24 @@ mijauth/
     │   ├── demo.html            # Browser storage demo
     │   ├── MijAuthStorage.js    # Session/Local/IndexedDB helper
     │   └── MijAuthWebAuthn.js   # WebAuthn helper
+    ├── pwa/
+    │   ├── index.html            # PWA demo UI
+    │   ├── app.js                # File System Access demo
+    │   ├── manifest.json
+    │   ├── sw.js
+    │   └── README.md
+    ├── extension/
+    │   ├── manifest.json         # WebExtension manifest (Edge/Firefox)
+    │   ├── background.js
+    │   ├── content.js
+    │   ├── popup.html
+    │   ├── popup.js
+    │   └── README.md
+    ├── desktop-helper/
+    │   ├── main.js               # Electron app + local server
+    │   ├── ui.html
+    │   ├── package.json
+    │   └── README.md
     ├── php/
     │   ├── MijAuth.php          # Core library / Główna biblioteka
     │   └── example.php          # Usage example / Przykład użycia
