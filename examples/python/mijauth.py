@@ -49,7 +49,8 @@ class MijAuth:
     def create_auth_file(
         user_id: str,
         user_key_base64: str,
-        device_hash: Optional[str] = None
+        device_hash: Optional[str] = None,
+        device_hash_v2: Optional[str] = None
     ) -> Tuple[str, str]:
         """
         Tworzy zaszyfrowany plik autoryzacyjny .mijauth
@@ -69,6 +70,7 @@ class MijAuth:
             'token': token,
             'created_at': datetime.utcnow().isoformat() + 'Z',
             'device_hash': device_hash,
+            'device_hash_v2': device_hash_v2,
             'version': MijAuth.VERSION
         }
 
@@ -139,10 +141,45 @@ class MijAuth:
         return token_match and user_id_match
 
     @staticmethod
+    def verify_auth_file_with_token_and_device(
+        file_content: str,
+        user_key_base64: str,
+        expected_token: str,
+        expected_user_id: str,
+        expected_device_hash: Optional[str] = None,
+        expected_device_hash_v2: Optional[str] = None
+    ) -> bool:
+        payload = MijAuth.verify_auth_file(file_content, user_key_base64)
+
+        if payload is None:
+            return False
+
+        token_match = secrets.compare_digest(expected_token, payload['token'])
+        user_id_match = secrets.compare_digest(expected_user_id, payload['user_id'])
+
+        if not token_match or not user_id_match:
+            return False
+
+        if expected_device_hash is not None:
+            if 'device_hash' not in payload:
+                return False
+            if not secrets.compare_digest(expected_device_hash, str(payload['device_hash'])):
+                return False
+
+        if expected_device_hash_v2 is not None:
+            if 'device_hash_v2' not in payload:
+                return False
+            if not secrets.compare_digest(expected_device_hash_v2, str(payload['device_hash_v2'])):
+                return False
+
+        return True
+
+    @staticmethod
     def regenerate_auth_file(
         user_id: str,
         user_key_base64: str,
-        device_hash: Optional[str] = None
+        device_hash: Optional[str] = None,
+        device_hash_v2: Optional[str] = None
     ) -> Tuple[str, str]:
         """
         Regeneruje plik autoryzacyjny (nowy token)
@@ -155,7 +192,7 @@ class MijAuth:
         Returns:
             Tuple (zawartość pliku, token)
         """
-        return MijAuth.create_auth_file(user_id, user_key_base64, device_hash)
+        return MijAuth.create_auth_file(user_id, user_key_base64, device_hash, device_hash_v2)
 
     @staticmethod
     def _encrypt(plaintext: str, key_base64: str) -> str:
@@ -226,6 +263,27 @@ class MijAuth:
             'accept_language': accept_language
         })
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def generate_device_hash_v2(context: Optional[Dict[str, Any]] = None) -> str:
+        if context is None:
+            context = {}
+
+        normalized = MijAuth._normalize_fingerprint_context(context)
+        data = json.dumps(normalized, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(data.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _normalize_fingerprint_context(context: Dict[str, Any]) -> Dict[str, Any]:
+        normalized: Dict[str, Any] = {}
+        for key, value in context.items():
+            if value is None:
+                continue
+            if isinstance(value, dict):
+                normalized[key] = MijAuth._normalize_fingerprint_context(value)
+            else:
+                normalized[key] = value
+        return dict(sorted(normalized.items()))
 
 
 class UserDatabase:

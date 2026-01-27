@@ -8,6 +8,7 @@ require 'securerandom'
 require 'base64'
 require 'json'
 require 'time'
+require 'digest'
 
 module MijAuth
   # Główna klasa systemu MijAuth do weryfikacji dwuetapowej
@@ -36,8 +37,9 @@ module MijAuth
       # @param user_id [String] Identyfikator użytkownika
       # @param user_key_base64 [String] Klucz użytkownika w base64
       # @param device_hash [String, nil] Opcjonalny hash urządzenia
+      # @param device_hash_v2 [String, nil] Opcjonalny hash urządzenia v2
       # @return [Hash] { file_content: String, token: String }
-      def create_auth_file(user_id, user_key_base64, device_hash: nil)
+      def create_auth_file(user_id, user_key_base64, device_hash: nil, device_hash_v2: nil)
         token = generate_token
 
         payload = {
@@ -45,6 +47,7 @@ module MijAuth
           token: token,
           created_at: Time.now.utc.iso8601,
           device_hash: device_hash,
+          device_hash_v2: device_hash_v2,
           version: VERSION
         }
 
@@ -91,14 +94,57 @@ module MijAuth
         token_match && user_id_match
       end
 
+      # Weryfikuje plik, token i hash urządzenia (v1/v2)
+      #
+      # @param file_content [String]
+      # @param user_key_base64 [String]
+      # @param expected_token [String]
+      # @param expected_user_id [String]
+      # @param expected_device_hash [String, nil]
+      # @param expected_device_hash_v2 [String, nil]
+      # @return [Boolean]
+      def verify_auth_file_with_token_and_device(
+        file_content,
+        user_key_base64,
+        expected_token,
+        expected_user_id,
+        expected_device_hash: nil,
+        expected_device_hash_v2: nil
+      )
+        payload = verify_auth_file(file_content, user_key_base64)
+        return false if payload.nil?
+
+        token_match = secure_compare(expected_token, payload[:token])
+        user_id_match = secure_compare(expected_user_id, payload[:user_id])
+        return false unless token_match && user_id_match
+
+        if expected_device_hash
+          return false unless payload[:device_hash]
+          return false unless secure_compare(expected_device_hash, payload[:device_hash].to_s)
+        end
+
+        if expected_device_hash_v2
+          return false unless payload[:device_hash_v2]
+          return false unless secure_compare(expected_device_hash_v2, payload[:device_hash_v2].to_s)
+        end
+
+        true
+      end
+
       # Regeneruje plik autoryzacyjny (nowy token)
       #
       # @param user_id [String] Identyfikator użytkownika
       # @param user_key_base64 [String] Klucz użytkownika w base64
       # @param device_hash [String, nil] Opcjonalny hash urządzenia
+      # @param device_hash_v2 [String, nil] Opcjonalny hash urządzenia v2
       # @return [Hash] { file_content: String, token: String }
-      def regenerate_auth_file(user_id, user_key_base64, device_hash: nil)
-        create_auth_file(user_id, user_key_base64, device_hash: device_hash)
+      def regenerate_auth_file(user_id, user_key_base64, device_hash: nil, device_hash_v2: nil)
+        create_auth_file(
+          user_id,
+          user_key_base64,
+          device_hash: device_hash,
+          device_hash_v2: device_hash_v2
+        )
       end
 
       # Generuje hash urządzenia na podstawie headers
@@ -108,6 +154,16 @@ module MijAuth
       # @return [String] Hash urządzenia
       def generate_device_hash(user_agent: '', accept_language: '')
         data = JSON.generate({ user_agent: user_agent, accept_language: accept_language })
+        Digest::SHA256.hexdigest(data)
+      end
+
+      # Generuje hash urządzenia v2 z kontekstu
+      #
+      # @param context [Hash]
+      # @return [String]
+      def generate_device_hash_v2(context = {})
+        normalized = normalize_fingerprint_context(context)
+        data = JSON.generate(normalized.sort.to_h)
         Digest::SHA256.hexdigest(data)
       end
 
@@ -162,6 +218,17 @@ module MijAuth
         res = 0
         l.zip(r) { |x, y| res |= x ^ y }
         res.zero?
+      end
+
+      def normalize_fingerprint_context(context)
+        normalized = {}
+        context.each do |key, value|
+          next if value.nil?
+
+          normalized[key] = value.is_a?(Hash) ? normalize_fingerprint_context(value) : value
+        end
+
+        normalized
       end
     end
   end
