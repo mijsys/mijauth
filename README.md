@@ -122,6 +122,20 @@ cd examples/ruby
 ruby example.rb
 ```
 
+#### Flutter
+```bash
+cd examples/flutter
+flutter pub get
+flutter run
+```
+
+#### Flutter
+```bash
+cd examples/flutter
+flutter pub get
+flutter run
+```
+
 ### API Reference
 
 Each implementation provides the same methods:
@@ -132,7 +146,23 @@ Each implementation provides the same methods:
 | `createAuthFile(userData, key)` | Creates an encrypted .mijauth file |
 | `verifyAuthFile(fileContent, key)` | Verifies the file and returns user data |
 | `verifyAuthFileWithToken(...)` | Verifies file against stored token |
+| `verifyAuthFileWithTokenAndDevice(...)` | Verifies file against stored token and device hash (v1/v2) |
 | `regenerateAuthFile(userId, key)` | Generates a new file (invalidates old one) |
+| `generateDeviceHashV2(...)` | Generates device fingerprint hash v2 |
+| `generateDeviceHashV2FromRequest(...)` | Generates device hash v2 from request headers |
+| `getLibraryVersion()` | Returns the library version string |
+
+### Attempt Logging (PHP)
+
+Use `AttemptLoggerInterface` to track authentication attempts (e.g., JSON Lines).
+
+```php
+use MijAuth\AuthManager;
+use MijAuth\Logging\JsonFileAttemptLogger;
+
+$logger = new JsonFileAttemptLogger(__DIR__ . '/logs/mijauth.log');
+$auth = new AuthManager(null, $logger);
+```
 
 ### Integration Example
 
@@ -383,7 +413,23 @@ Każda implementacja udostępnia te same metody:
 | `createAuthFile(userData, key)` | Tworzy zaszyfrowany plik .mijauth |
 | `verifyAuthFile(fileContent, key)` | Weryfikuje plik i zwraca dane użytkownika |
 | `verifyAuthFileWithToken(...)` | Weryfikuje plik względem zapisanego tokenu |
+| `verifyAuthFileWithTokenAndDevice(...)` | Weryfikuje plik względem tokenu i hashy urządzenia (v1/v2) |
 | `regenerateAuthFile(userId, key)` | Generuje nowy plik (unieważnia stary) |
+| `generateDeviceHashV2(...)` | Generuje hash fingerprintu urządzenia v2 |
+| `generateDeviceHashV2FromRequest(...)` | Generuje hash v2 na podstawie nagłówków |
+| `getLibraryVersion()` | Zwraca wersję biblioteki |
+
+### Logowanie prób (PHP)
+
+Użyj `AttemptLoggerInterface`, aby logować próby autoryzacji (np. JSON Lines).
+
+```php
+use MijAuth\AuthManager;
+use MijAuth\Logging\JsonFileAttemptLogger;
+
+$logger = new JsonFileAttemptLogger(__DIR__ . '/logs/mijauth.log');
+$auth = new AuthManager(null, $logger);
+```
 
 ### Przykład integracji
 
@@ -513,7 +559,19 @@ if ($_POST['action'] === 'login_step2' && isset($_FILES['authFile'])) {
 ```
 mijauth/
 ├── README.md                    # This documentation / Ta dokumentacja
+└── packages/
+    └── mijauth_flutter/
+        ├── lib/mijauth.dart      # Flutter/Dart library
+        ├── example/main.dart
+        ├── pubspec.yaml
+        ├── README.md
+        ├── CHANGELOG.md
+        └── LICENSE
 └── examples/
+    ├── browser-storage/
+    │   ├── demo.html            # Browser storage demo
+    │   ├── MijAuthStorage.js    # Session/Local/IndexedDB helper
+    │   └── MijAuthWebAuthn.js   # WebAuthn helper
     ├── php/
     │   ├── MijAuth.php          # Core library / Główna biblioteka
     │   └── example.php          # Usage example / Przykład użycia
@@ -536,6 +594,12 @@ mijauth/
     └── ruby/
         ├── mijauth.rb           # Core library / Główna biblioteka
         └── example.rb           # Usage example / Przykład użycia
+    └── flutter/
+        ├── lib/
+        │   ├── mijauth.dart      # Core library (Dart)
+        │   └── main.dart         # Flutter demo UI
+        ├── pubspec.yaml
+        └── README.md
 ```
 
 ---

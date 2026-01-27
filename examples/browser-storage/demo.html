@@ -1,1 +1,161 @@
-<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Browser Storage Demo</title>\n    <style>\n        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }\n        h1 { color: #333; }\n        .container { max-width: 600px; margin: auto; background: #fff; padding: 20px; border-radius: 5px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }\n        input[type=\"file\"] { margin: 10px 0; }\n        button { background: #4CAF50; color: white; padding: 10px; border: none; border-radius: 5px; cursor: pointer; }\n        button:hover { background: #45a049; }\n        .status { margin: 15px 0; }\n    </style>\n</head>\n<body>\n<div class=\"container\">\n    <h1>Browser Storage Demo</h1>\n    <div class=\"status\">Storage Status: <span id=\"status\">Not Initialized</span></div>\n    <div>\n        <label for=\"storageType\">Select Storage Type: </label>\n        <select id=\"storageType\">\n            <option value=\"sessionStorage\">Session Storage</option>\n            <option value=\"localStorage\">Local Storage</option>\n            <option value=\"indexedDB\">IndexedDB</option>\n        </select>\n    </div>\n    <div>\n        <input type=\"file\" id=\"fileInput\">\n        <button id=\"uploadBtn\">Upload</button>\n    </div>\n    <div>\n        <label for=\"encrypt\">Enable Encryption: </label>\n        <input type=\"checkbox\" id=\"encrypt\">\n    </div>\n    <div>\n        <button id=\"loginBtn\">Demo Login</button>\n    </div>\n    <div class=\"status\">User Status: <span id=\"userStatus\">Logged Out</span></div>\n</div>\n<script>\n    document.getElementById('uploadBtn').addEventListener('click', function() {\n        const fileInput = document.getElementById('fileInput');\n        const storageType = document.getElementById('storageType').value;\n        let file = fileInput.files[0];\n        if (!file) {\n            alert('Please select a file first.');\n            return;\n        }\n        let reader = new FileReader();\n        reader.onload = function(event) {\n            let data = event.target.result;\n            if (document.getElementById('encrypt').checked) {\n                // Simple encryption simulation\n                data = btoa(data); // Basic base64 encoding as encryption example\n            }\n            if (storageType === 'sessionStorage') {\n                sessionStorage.setItem('uploadedFile', data);\n                document.getElementById('status').innerText = 'File saved in Session Storage';\n            } else if (storageType === 'localStorage') {\n                localStorage.setItem('uploadedFile', data);\n                document.getElementById('status').innerText = 'File saved in Local Storage';\n            } else if (storageType === 'indexedDB') {\n                // IndexedDB logic here (simple demo)\n                let request = indexedDB.open('myDatabase', 1);\n                request.onupgradeneeded = function(event) {\n                    let db = event.target.result;\n                    db.createObjectStore('files', { keyPath: 'id' });\n                };\n                request.onsuccess = function(event) {\n                    let db = event.target.result;\n                    let transaction = db.transaction(['files'], 'readwrite');\n                    let store = transaction.objectStore('files');\n                    store.add({ id: 'uploadedFile', content: data });\n                    document.getElementById('status').innerText = 'File saved in IndexedDB';\n                };\n            }\n        };\n        reader.readAsText(file);\n    });\n    document.getElementById('loginBtn').addEventListener('click', function() {\n        document.getElementById('userStatus').innerText = 'Logged In';\n    });\n</script>\n</body>\n</html>\n
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Browser Storage Demo</title>
+	<style>
+		body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+		h1 { color: #333; }
+		.container { max-width: 700px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+		input[type="file"] { margin: 10px 0; }
+		button { background: #4CAF50; color: white; padding: 10px 14px; border: none; border-radius: 6px; cursor: pointer; margin-right: 8px; }
+		button.secondary { background: #6c757d; }
+		button:hover { background: #45a049; }
+		button.secondary:hover { background: #5a6268; }
+		.status { margin: 12px 0; }
+		.row { margin: 12px 0; }
+		.muted { color: #666; font-size: 0.9em; }
+	</style>
+</head>
+<body>
+<div class="container">
+	<h1>Browser Storage Demo (MijAuth v0.3)</h1>
+
+	<div class="status">Storage Status: <span id="status">Not Initialized</span></div>
+	<div class="status">WebAuthn Status: <span id="webauthnStatus">Unknown</span></div>
+
+	<div class="row">
+		<label for="storageType">Select Storage Type: </label>
+		<select id="storageType">
+			<option value="session">Session Storage</option>
+			<option value="local">Local Storage</option>
+			<option value="indexed">IndexedDB</option>
+		</select>
+	</div>
+
+	<div class="row">
+		<input type="file" id="fileInput">
+		<button id="saveBtn">Save</button>
+		<button id="loadBtn" class="secondary">Load</button>
+		<button id="clearBtn" class="secondary">Clear</button>
+	</div>
+
+	<div class="row">
+		<label for="encrypt">Enable Encryption: </label>
+		<input type="checkbox" id="encrypt" checked>
+		<span class="muted">(WebCrypto + session key)</span>
+	</div>
+
+	<div class="row">
+		<button id="registerWebAuthn">Register WebAuthn</button>
+		<button id="authWebAuthn" class="secondary">Authenticate WebAuthn</button>
+	</div>
+
+	<div class="status">User Status: <span id="userStatus">Logged Out</span></div>
+</div>
+
+<script src="MijAuthStorage.js"></script>
+<script src="MijAuthWebAuthn.js"></script>
+<script>
+	const statusEl = document.getElementById('status');
+	const userStatusEl = document.getElementById('userStatus');
+	const webauthnStatusEl = document.getElementById('webauthnStatus');
+
+	webauthnStatusEl.textContent = MijAuthWebAuthn.isSupported() ? 'Supported' : 'Not Supported';
+
+	async function saveFile() {
+		const fileInput = document.getElementById('fileInput');
+		const storageType = document.getElementById('storageType').value;
+		const file = fileInput.files[0];
+
+		if (!file) {
+			alert('Please select a file first.');
+			return;
+		}
+
+		const fileContent = await file.text();
+		const encrypt = document.getElementById('encrypt').checked;
+
+		try {
+			await MijAuthStorage.saveAuthFile(fileContent, {
+				storageType,
+				encrypt,
+				expiresIn: 1000 * 60 * 60
+			});
+			statusEl.textContent = `Saved in ${storageType}`;
+		} catch (error) {
+			statusEl.textContent = error.message;
+		}
+	}
+
+	async function loadFile() {
+		const storageType = document.getElementById('storageType').value;
+		try {
+			const fileContent = await MijAuthStorage.loadAuthFile({ storageType });
+			if (!fileContent) {
+				statusEl.textContent = 'No file found';
+				return;
+			}
+			statusEl.textContent = `Loaded from ${storageType}`;
+			userStatusEl.textContent = 'Logged In (demo)';
+		} catch (error) {
+			statusEl.textContent = error.message;
+		}
+	}
+
+	async function clearFile() {
+		const storageType = document.getElementById('storageType').value;
+		await MijAuthStorage.clearAuthFile({ storageType });
+		statusEl.textContent = `Cleared ${storageType}`;
+		userStatusEl.textContent = 'Logged Out';
+	}
+
+	async function registerWebAuthn() {
+		if (!MijAuthWebAuthn.isSupported()) {
+			alert('WebAuthn not supported');
+			return;
+		}
+
+		const challenge = MijAuthWebAuthn._uint8ArrayToBase64url(crypto.getRandomValues(new Uint8Array(32)));
+		const userId = MijAuthWebAuthn._uint8ArrayToBase64url(crypto.getRandomValues(new Uint8Array(16)));
+
+		try {
+			const attestation = await MijAuthWebAuthn.register({
+				challenge,
+				userId,
+				userName: 'demo-user@example.com'
+			});
+			console.log('WebAuthn attestation', attestation);
+			userStatusEl.textContent = 'WebAuthn Registered (demo)';
+		} catch (error) {
+			userStatusEl.textContent = error.message;
+		}
+	}
+
+	async function authenticateWebAuthn() {
+		if (!MijAuthWebAuthn.isSupported()) {
+			alert('WebAuthn not supported');
+			return;
+		}
+
+		const challenge = MijAuthWebAuthn._uint8ArrayToBase64url(crypto.getRandomValues(new Uint8Array(32)));
+		try {
+			const assertion = await MijAuthWebAuthn.authenticate({
+				challenge
+			});
+			console.log('WebAuthn assertion', assertion);
+			userStatusEl.textContent = 'WebAuthn Authenticated (demo)';
+		} catch (error) {
+			userStatusEl.textContent = error.message;
+		}
+	}
+
+	document.getElementById('saveBtn').addEventListener('click', saveFile);
+	document.getElementById('loadBtn').addEventListener('click', loadFile);
+	document.getElementById('clearBtn').addEventListener('click', clearFile);
+	document.getElementById('registerWebAuthn').addEventListener('click', registerWebAuthn);
+	document.getElementById('authWebAuthn').addEventListener('click', authenticateWebAuthn);
+</script>
+</body>
+</html>

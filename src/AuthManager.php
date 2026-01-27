@@ -13,6 +13,8 @@ namespace MijAuth;
 
 use MijAuth\Storage\UserStorageInterface;
 use MijAuth\Storage\JsonFileStorage;
+use MijAuth\Logging\AttemptLoggerInterface;
+use MijAuth\Logging\NullAttemptLogger;
 
 /**
  * High-level authentication manager that combines user storage with MijAuth
@@ -20,13 +22,19 @@ use MijAuth\Storage\JsonFileStorage;
 class AuthManager
 {
     private UserStorageInterface $storage;
+    private AttemptLoggerInterface $attemptLogger;
 
     /**
      * @param UserStorageInterface|null $storage User storage implementation
+     * @param AttemptLoggerInterface|null $attemptLogger Attempt logger
      */
-    public function __construct(?UserStorageInterface $storage = null)
+    public function __construct(
+        ?UserStorageInterface $storage = null,
+        ?AttemptLoggerInterface $attemptLogger = null
+    )
     {
         $this->storage = $storage ?? new JsonFileStorage();
+        $this->attemptLogger = $attemptLogger ?? new NullAttemptLogger();
     }
 
     /**
@@ -35,17 +43,19 @@ class AuthManager
      * @param string $userId Unique user identifier
      * @param string $email User's email
      * @param string $password Plain text password (will be hashed)
-     * @param string|null $deviceHash Optional device fingerprint
+     * @param string|null $deviceHash Optional device fingerprint (v1)
+     * @param string|null $deviceHashV2 Optional device fingerprint (v2)
      * @return array{user: array, auth_file: string}
      */
     public function registerUser(
         string $userId,
         string $email,
         string $password,
-        ?string $deviceHash = null
+        ?string $deviceHash = null,
+        ?string $deviceHashV2 = null
     ): array {
         $userKey = MijAuth::generateUserKey();
-        $authResult = MijAuth::createAuthFile($userId, $userKey, $deviceHash);
+        $authResult = MijAuth::createAuthFile($userId, $userKey, $deviceHash, $deviceHashV2);
 
         $user = [
             'id' => $userId,
@@ -76,12 +86,24 @@ class AuthManager
         $user = $this->storage->findByEmail($email);
         
         if ($user === null) {
+            $this->logAttempt('password_verification', false, [
+                'email' => $email
+            ]);
             return null;
         }
 
         if (!password_verify($password, $user['password_hash'])) {
+            $this->logAttempt('password_verification', false, [
+                'email' => $email,
+                'user_id' => $user['id'] ?? null
+            ]);
             return null;
         }
+
+        $this->logAttempt('password_verification', true, [
+            'email' => $email,
+            'user_id' => $user['id'] ?? null
+        ]);
 
         return $user;
     }
@@ -98,15 +120,26 @@ class AuthManager
         $user = $this->storage->findById($userId);
         
         if ($user === null) {
+            $this->logAttempt('auth_file_verification', false, [
+                'user_id' => $userId,
+                'file_size' => strlen($fileContent)
+            ]);
             return false;
         }
 
-        return MijAuth::verifyAuthFileWithToken(
+        $result = MijAuth::verifyAuthFileWithToken(
             $fileContent,
             $user['encryption_key'],
             $user['auth_token'],
             $user['id']
         );
+
+        $this->logAttempt('auth_file_verification', $result, [
+            'user_id' => $user['id'],
+            'file_size' => strlen($fileContent)
+        ]);
+
+        return $result;
     }
 
     /**
@@ -122,13 +155,25 @@ class AuthManager
         // Step 1: Verify password
         $user = $this->verifyPassword($email, $password);
         if ($user === null) {
+            $this->logAttempt('login', false, [
+                'email' => $email
+            ]);
             return null;
         }
 
         // Step 2: Verify auth file
         if (!$this->verifyAuthFile($user['id'], $authFileContent)) {
+            $this->logAttempt('login', false, [
+                'email' => $email,
+                'user_id' => $user['id'] ?? null
+            ]);
             return null;
         }
+
+        $this->logAttempt('login', true, [
+            'email' => $email,
+            'user_id' => $user['id'] ?? null
+        ]);
 
         return $user;
     }
@@ -137,10 +182,15 @@ class AuthManager
      * Regenerate auth file for a user (invalidates old file)
      * 
      * @param string $userId User ID
-     * @param string|null $deviceHash Optional new device fingerprint
+     * @param string|null $deviceHash Optional new device fingerprint (v1)
+     * @param string|null $deviceHashV2 Optional new device fingerprint (v2)
      * @return string|null New auth file content, or null if user not found
      */
-    public function regenerateAuthFile(string $userId, ?string $deviceHash = null): ?string
+    public function regenerateAuthFile(
+        string $userId,
+        ?string $deviceHash = null,
+        ?string $deviceHashV2 = null
+    ): ?string
     {
         $user = $this->storage->findById($userId);
         
@@ -151,7 +201,8 @@ class AuthManager
         $authResult = MijAuth::regenerateAuthFile(
             $userId,
             $user['encryption_key'],
-            $deviceHash
+            $deviceHash,
+            $deviceHashV2
         );
 
         $this->storage->updateAuthToken($userId, $authResult['token']);
@@ -189,5 +240,26 @@ class AuthManager
     public function getStorage(): UserStorageInterface
     {
         return $this->storage;
+    }
+
+    /**
+     * Log authorization attempt
+     *
+     * @param string $event
+     * @param bool $success
+     * @param array $context
+     * @return void
+     */
+    private function logAttempt(string $event, bool $success, array $context = []): void
+    {
+        $payload = array_merge([
+            'event' => $event,
+            'success' => $success,
+            'ip' => $_SERVER['REMOTE_ADDR'] ?? null,
+            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? null,
+            'occurred_at' => date('c')
+        ], $context);
+
+        $this->attemptLogger->logAttempt($payload);
     }
 }
