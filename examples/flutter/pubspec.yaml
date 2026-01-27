@@ -1,0 +1,21 @@
+name: mijauth_flutter
+version: 0.3.0
+publish_to: 'none'
+
+description: MijAuth Flutter example
+
+environment:
+  sdk: ">=2.19.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cryptography: ^2.7.0
+  crypto: ^3.0.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

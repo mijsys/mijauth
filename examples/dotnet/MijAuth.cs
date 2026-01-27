@@ -55,7 +55,8 @@ namespace MijAuth
         public static (string FileContent, string Token) CreateAuthFile(
             string userId,
             string userKeyBase64,
-            string? deviceHash = null)
+            string? deviceHash = null,
+            string? deviceHashV2 = null)
         {
             var token = GenerateToken();
 
@@ -65,6 +66,7 @@ namespace MijAuth
                 Token = token,
                 CreatedAt = DateTime.UtcNow.ToString("o"),
                 DeviceHash = deviceHash,
+                DeviceHashV2 = deviceHashV2,
                 Version = Version
             };
 
@@ -136,6 +138,58 @@ namespace MijAuth
         }
 
         /// <summary>
+        /// Weryfikuje plik, token i hash urządzenia (v1/v2)
+        /// </summary>
+        public static bool VerifyAuthFileWithTokenAndDevice(
+            string fileContent,
+            string userKeyBase64,
+            string expectedToken,
+            string expectedUserId,
+            string? expectedDeviceHash = null,
+            string? expectedDeviceHashV2 = null)
+        {
+            var payload = VerifyAuthFile(fileContent, userKeyBase64);
+
+            if (payload == null)
+                return false;
+
+            var tokenMatch = CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(expectedToken),
+                Encoding.UTF8.GetBytes(payload.Token));
+
+            var userMatch = CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(expectedUserId),
+                Encoding.UTF8.GetBytes(payload.UserId));
+
+            if (!tokenMatch || !userMatch)
+                return false;
+
+            if (expectedDeviceHash != null)
+            {
+                if (string.IsNullOrEmpty(payload.DeviceHash))
+                    return false;
+
+                if (!CryptographicOperations.FixedTimeEquals(
+                        Encoding.UTF8.GetBytes(expectedDeviceHash),
+                        Encoding.UTF8.GetBytes(payload.DeviceHash)))
+                    return false;
+            }
+
+            if (expectedDeviceHashV2 != null)
+            {
+                if (string.IsNullOrEmpty(payload.DeviceHashV2))
+                    return false;
+
+                if (!CryptographicOperations.FixedTimeEquals(
+                        Encoding.UTF8.GetBytes(expectedDeviceHashV2),
+                        Encoding.UTF8.GetBytes(payload.DeviceHashV2)))
+                    return false;
+            }
+
+            return true;
+        }
+
+        /// <summary>
         /// Regeneruje plik autoryzacyjny (nowy token)
         /// </summary>
         /// <param name="userId">Identyfikator użytkownika</param>
@@ -145,9 +199,10 @@ namespace MijAuth
         public static (string FileContent, string Token) RegenerateAuthFile(
             string userId,
             string userKeyBase64,
-            string? deviceHash = null)
+            string? deviceHash = null,
+            string? deviceHashV2 = null)
         {
-            return CreateAuthFile(userId, userKeyBase64, deviceHash);
+            return CreateAuthFile(userId, userKeyBase64, deviceHash, deviceHashV2);
         }
 
         /// <summary>
@@ -218,6 +273,38 @@ namespace MijAuth
             var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(data));
             return Convert.ToHexString(bytes).ToLowerInvariant();
         }
+
+        /// <summary>
+        /// Generuje hash urządzenia v2 z kontekstu
+        /// </summary>
+        public static string GenerateDeviceHashV2(Dictionary<string, object?> context)
+        {
+            var normalized = NormalizeFingerprintContext(context);
+            var json = JsonSerializer.Serialize(normalized);
+            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(json));
+            return Convert.ToHexString(bytes).ToLowerInvariant();
+        }
+
+        private static Dictionary<string, object?> NormalizeFingerprintContext(Dictionary<string, object?> context)
+        {
+            var normalized = new SortedDictionary<string, object?>();
+            foreach (var entry in context)
+            {
+                if (entry.Value == null)
+                    continue;
+
+                if (entry.Value is Dictionary<string, object?> nested)
+                {
+                    normalized[entry.Key] = NormalizeFingerprintContext(nested);
+                }
+                else
+                {
+                    normalized[entry.Key] = entry.Value;
+                }
+            }
+
+            return new Dictionary<string, object?>(normalized);
+        }
     }
 
     /// <summary>
@@ -229,6 +316,7 @@ namespace MijAuth
         public string Token { get; set; } = "";
         public string CreatedAt { get; set; } = "";
         public string? DeviceHash { get; set; }
+        public string? DeviceHashV2 { get; set; }
         public int Version { get; set; }
     }
 
@@ -280,7 +368,7 @@ namespace MijAuth
         public (User User, string AuthFile) CreateUser(string userId, string email, string password)
         {
             var userKey = MijAuthService.GenerateUserKey();
-            var (fileContent, token) = MijAuthService.CreateAuthFile(userId, userKey);
+            var (fileContent, token) = MijAuthService.CreateAuthFile(userId, userKey, null, null);
 
             // Hash hasła (w produkcji użyj BCrypt lub Argon2)
             var passwordHash = Convert.ToHexString(

@@ -11,11 +11,14 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -28,11 +31,12 @@ const (
 
 // AuthPayload struktura danych w pliku .mijauth
 type AuthPayload struct {
-	UserID     string  `json:"user_id"`
-	Token      string  `json:"token"`
-	CreatedAt  string  `json:"created_at"`
-	DeviceHash *string `json:"device_hash"`
-	Version    int     `json:"version"`
+	UserID       string  `json:"user_id"`
+	Token        string  `json:"token"`
+	CreatedAt    string  `json:"created_at"`
+	DeviceHash   *string `json:"device_hash"`
+	DeviceHashV2 *string `json:"device_hash_v2"`
+	Version      int     `json:"version"`
 }
 
 // User model użytkownika
@@ -67,18 +71,19 @@ func (m *MijAuth) GenerateToken() (string, error) {
 }
 
 // CreateAuthFile tworzy zaszyfrowany plik autoryzacyjny .mijauth
-func (m *MijAuth) CreateAuthFile(userID, userKeyBase64 string, deviceHash *string) (string, string, error) {
+func (m *MijAuth) CreateAuthFile(userID, userKeyBase64 string, deviceHash *string, deviceHashV2 *string) (string, string, error) {
 	token, err := m.GenerateToken()
 	if err != nil {
 		return "", "", err
 	}
 
 	payload := AuthPayload{
-		UserID:     userID,
-		Token:      token,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		DeviceHash: deviceHash,
-		Version:    Version,
+		UserID:       userID,
+		Token:        token,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		DeviceHash:   deviceHash,
+		DeviceHashV2: deviceHashV2,
+		Version:      Version,
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -128,9 +133,49 @@ func (m *MijAuth) VerifyAuthFileWithToken(fileContent, userKeyBase64, expectedTo
 	return tokenMatch && userIDMatch
 }
 
+// VerifyAuthFileWithTokenAndDevice weryfikuje plik, token i hash urządzenia (v1/v2)
+func (m *MijAuth) VerifyAuthFileWithTokenAndDevice(
+	fileContent, userKeyBase64, expectedToken, expectedUserID string,
+	expectedDeviceHash *string,
+	expectedDeviceHashV2 *string,
+) bool {
+	payload, err := m.VerifyAuthFile(fileContent, userKeyBase64)
+	if err != nil {
+		return false
+	}
+
+	tokenMatch := subtle.ConstantTimeCompare([]byte(expectedToken), []byte(payload.Token)) == 1
+	userIDMatch := subtle.ConstantTimeCompare([]byte(expectedUserID), []byte(payload.UserID)) == 1
+	if !tokenMatch || !userIDMatch {
+		return false
+	}
+
+	if expectedDeviceHash != nil {
+		if payload.DeviceHash == nil {
+			return false
+		}
+		deviceMatch := subtle.ConstantTimeCompare([]byte(*expectedDeviceHash), []byte(*payload.DeviceHash)) == 1
+		if !deviceMatch {
+			return false
+		}
+	}
+
+	if expectedDeviceHashV2 != nil {
+		if payload.DeviceHashV2 == nil {
+			return false
+		}
+		deviceMatchV2 := subtle.ConstantTimeCompare([]byte(*expectedDeviceHashV2), []byte(*payload.DeviceHashV2)) == 1
+		if !deviceMatchV2 {
+			return false
+		}
+	}
+
+	return true
+}
+
 // RegenerateAuthFile regeneruje plik autoryzacyjny (nowy token)
-func (m *MijAuth) RegenerateAuthFile(userID, userKeyBase64 string, deviceHash *string) (string, string, error) {
-	return m.CreateAuthFile(userID, userKeyBase64, deviceHash)
+func (m *MijAuth) RegenerateAuthFile(userID, userKeyBase64 string, deviceHash *string, deviceHashV2 *string) (string, string, error) {
+	return m.CreateAuthFile(userID, userKeyBase64, deviceHash, deviceHashV2)
 }
 
 // encrypt szyfruje dane przy użyciu AES-256-GCM
@@ -207,6 +252,17 @@ func (m *MijAuth) GenerateDeviceHash(userAgent, acceptLanguage string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// GenerateDeviceHashV2 generuje hash urządzenia v2 z kontekstu
+func (m *MijAuth) GenerateDeviceHashV2(context map[string]interface{}) string {
+	normalized := normalizeFingerprintContext(context)
+	jsonString, err := encodeSortedJSON(normalized)
+	if err != nil {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(jsonString))
+	return hex.EncodeToString(hash[:])
+}
+
 // UserDatabase symulacja bazy danych użytkowników
 type UserDatabase struct {
 	users       map[string]*User
@@ -248,7 +304,7 @@ func (db *UserDatabase) CreateUser(userID, email, password string) (*User, strin
 		return nil, "", err
 	}
 
-	fileContent, token, err := auth.CreateAuthFile(userID, userKey, nil)
+	fileContent, token, err := auth.CreateAuthFile(userID, userKey, nil, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -311,4 +367,80 @@ func generateRandomHex(n int) string {
 	bytes := make([]byte, n)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
+}
+
+func normalizeFingerprintContext(context map[string]interface{}) map[string]interface{} {
+	normalized := make(map[string]interface{})
+	for key, value := range context {
+		if value == nil {
+			continue
+		}
+		switch v := value.(type) {
+		case map[string]interface{}:
+			normalized[key] = normalizeFingerprintContext(v)
+		default:
+			normalized[key] = v
+		}
+	}
+	return normalized
+}
+
+func encodeSortedJSON(value interface{}) (string, error) {
+	var buffer bytes.Buffer
+	if err := writeSortedJSON(&buffer, value); err != nil {
+		return "", err
+	}
+	return buffer.String(), nil
+}
+
+func writeSortedJSON(buffer *bytes.Buffer, value interface{}) error {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		keys := make([]string, 0, len(v))
+		for key := range v {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		buffer.WriteString("{")
+		for i, key := range keys {
+			if i > 0 {
+				buffer.WriteString(",")
+			}
+			keyJSON, err := json.Marshal(key)
+			if err != nil {
+				return err
+			}
+			buffer.Write(keyJSON)
+			buffer.WriteString(":")
+			if err := writeSortedJSON(buffer, v[key]); err != nil {
+				return err
+			}
+		}
+		buffer.WriteString("}")
+	case []interface{}:
+		buffer.WriteString("[")
+		for i, item := range v {
+			if i > 0 {
+				buffer.WriteString(",")
+			}
+			if err := writeSortedJSON(buffer, item); err != nil {
+				return err
+			}
+		}
+		buffer.WriteString("]")
+	case string:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		buffer.Write(encoded)
+	default:
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		buffer.WriteString(strings.TrimSpace(string(encoded)))
+	}
+
+	return nil
 }

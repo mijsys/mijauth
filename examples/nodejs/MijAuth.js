@@ -40,7 +40,7 @@ class MijAuth {
      * @param {string|null} deviceHash - Opcjonalny hash urządzenia
      * @returns {{fileContent: string, token: string}}
      */
-    static createAuthFile(userId, userKeyBase64, deviceHash = null) {
+    static createAuthFile(userId, userKeyBase64, deviceHash = null, deviceHashV2 = null) {
         const token = this.generateToken();
         
         const payload = {
@@ -48,6 +48,7 @@ class MijAuth {
             token: token,
             created_at: new Date().toISOString(),
             device_hash: deviceHash,
+            device_hash_v2: deviceHashV2,
             version: this.VERSION
         };
 
@@ -118,6 +119,73 @@ class MijAuth {
     }
 
     /**
+     * Weryfikuje plik, token i hash urządzenia (v1/v2)
+     *
+     * @param {string} fileContent
+     * @param {string} userKeyBase64
+     * @param {string} expectedToken
+     * @param {string} expectedUserId
+     * @param {string|null} expectedDeviceHash
+     * @param {string|null} expectedDeviceHashV2
+     * @returns {boolean}
+     */
+    static verifyAuthFileWithTokenAndDevice(
+        fileContent,
+        userKeyBase64,
+        expectedToken,
+        expectedUserId,
+        expectedDeviceHash = null,
+        expectedDeviceHashV2 = null
+    ) {
+        const payload = this.verifyAuthFile(fileContent, userKeyBase64);
+
+        if (payload === null) {
+            return false;
+        }
+
+        const tokenMatch = crypto.timingSafeEqual(
+            Buffer.from(expectedToken),
+            Buffer.from(payload.token)
+        );
+        const userIdMatch = crypto.timingSafeEqual(
+            Buffer.from(expectedUserId),
+            Buffer.from(payload.user_id)
+        );
+
+        if (!tokenMatch || !userIdMatch) {
+            return false;
+        }
+
+        if (expectedDeviceHash !== null) {
+            if (!payload.device_hash) {
+                return false;
+            }
+            const deviceMatch = crypto.timingSafeEqual(
+                Buffer.from(expectedDeviceHash),
+                Buffer.from(payload.device_hash)
+            );
+            if (!deviceMatch) {
+                return false;
+            }
+        }
+
+        if (expectedDeviceHashV2 !== null) {
+            if (!payload.device_hash_v2) {
+                return false;
+            }
+            const deviceMatchV2 = crypto.timingSafeEqual(
+                Buffer.from(expectedDeviceHashV2),
+                Buffer.from(payload.device_hash_v2)
+            );
+            if (!deviceMatchV2) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Regeneruje plik autoryzacyjny (nowy token)
      * 
      * @param {string} userId - Identyfikator użytkownika
@@ -125,8 +193,8 @@ class MijAuth {
      * @param {string|null} deviceHash - Opcjonalny hash urządzenia
      * @returns {{fileContent: string, token: string}}
      */
-    static regenerateAuthFile(userId, userKeyBase64, deviceHash = null) {
-        return this.createAuthFile(userId, userKeyBase64, deviceHash);
+    static regenerateAuthFile(userId, userKeyBase64, deviceHash = null, deviceHashV2 = null) {
+        return this.createAuthFile(userId, userKeyBase64, deviceHash, deviceHashV2);
     }
 
     /**
@@ -200,6 +268,37 @@ class MijAuth {
         return crypto.createHash('sha256')
             .update(JSON.stringify(data))
             .digest('hex');
+    }
+
+    /**
+     * Generuje hash urządzenia v2 z rozszerzonego kontekstu
+     *
+     * @param {object} context
+     * @returns {string}
+     */
+    static generateDeviceHashV2(context = {}) {
+        const normalized = this._normalizeFingerprintContext(context);
+        return crypto.createHash('sha256')
+            .update(JSON.stringify(normalized))
+            .digest('hex');
+    }
+
+    static _normalizeFingerprintContext(context) {
+        const normalized = {};
+        Object.keys(context)
+            .sort()
+            .forEach((key) => {
+                const value = context[key];
+                if (value === null || value === undefined) {
+                    return;
+                }
+                if (typeof value === 'object' && !Array.isArray(value)) {
+                    normalized[key] = this._normalizeFingerprintContext(value);
+                } else {
+                    normalized[key] = value;
+                }
+            });
+        return normalized;
     }
 }
 

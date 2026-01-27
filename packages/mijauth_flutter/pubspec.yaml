@@ -1,0 +1,17 @@
+name: mijauth_flutter
+version: 0.3.0
+description: File-based 2FA (.mijauth) library for Flutter/Dart.
+
+homepage: https://github.com/MijagiKutasamoto/mijauth
+repository: https://github.com/MijagiKutasamoto/mijauth
+issue_tracker: https://github.com/MijagiKutasamoto/mijauth/issues
+
+environment:
+  sdk: ">=2.19.0 <4.0.0"
+
+dependencies:
+  cryptography: ^2.7.0
+  crypto: ^3.0.3
+
+dev_dependencies:
+  test: ^1.24.0

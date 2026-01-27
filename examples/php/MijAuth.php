@@ -44,7 +44,8 @@ class MijAuth
     public static function createAuthFile(
         string $userId,
         string $userKeyBase64,
-        ?string $deviceHash = null
+        ?string $deviceHash = null,
+        ?string $deviceHashV2 = null
     ): array {
         $token = self::generateToken();
         
@@ -53,6 +54,7 @@ class MijAuth
             'token' => $token,
             'created_at' => date('c'),
             'device_hash' => $deviceHash,
+            'device_hash_v2' => $deviceHashV2,
             'version' => self::VERSION
         ];
 
@@ -123,6 +125,53 @@ class MijAuth
     }
 
     /**
+     * Weryfikuje plik, token i hash urządzenia (v1/v2)
+     *
+     * @param string $fileContent
+     * @param string $userKeyBase64
+     * @param string $expectedToken
+     * @param string $expectedUserId
+     * @param string|null $expectedDeviceHash
+     * @param string|null $expectedDeviceHashV2
+     * @return bool
+     */
+    public static function verifyAuthFileWithTokenAndDevice(
+        string $fileContent,
+        string $userKeyBase64,
+        string $expectedToken,
+        string $expectedUserId,
+        ?string $expectedDeviceHash = null,
+        ?string $expectedDeviceHashV2 = null
+    ): bool {
+        $payload = self::verifyAuthFile($fileContent, $userKeyBase64);
+
+        if ($payload === null) {
+            return false;
+        }
+
+        if (!hash_equals($expectedToken, $payload['token'])
+            || !hash_equals($expectedUserId, $payload['user_id'])) {
+            return false;
+        }
+
+        if ($expectedDeviceHash !== null) {
+            if (!isset($payload['device_hash'])
+                || !hash_equals($expectedDeviceHash, (string) $payload['device_hash'])) {
+                return false;
+            }
+        }
+
+        if ($expectedDeviceHashV2 !== null) {
+            if (!isset($payload['device_hash_v2'])
+                || !hash_equals($expectedDeviceHashV2, (string) $payload['device_hash_v2'])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Regeneruje plik autoryzacyjny (nowy token)
      * Stary plik zostanie automatycznie unieważniony
      * 
@@ -134,10 +183,11 @@ class MijAuth
     public static function regenerateAuthFile(
         string $userId,
         string $userKeyBase64,
-        ?string $deviceHash = null
+        ?string $deviceHash = null,
+        ?string $deviceHashV2 = null
     ): array {
         // Po prostu tworzymy nowy plik z nowym tokenem
-        return self::createAuthFile($userId, $userKeyBase64, $deviceHash);
+        return self::createAuthFile($userId, $userKeyBase64, $deviceHash, $deviceHashV2);
     }
 
     /**
@@ -220,6 +270,49 @@ class MijAuth
         ];
 
         return hash('sha256', json_encode($data));
+    }
+
+    /**
+     * Generuje hash urządzenia v2 z rozszerzonego kontekstu
+     *
+     * @param array $context
+     * @return string
+     */
+    public static function generateDeviceHashV2(array $context = []): string
+    {
+        $normalized = self::normalizeFingerprintContext($context);
+
+        return hash('sha256', json_encode(
+            $normalized,
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        ));
+    }
+
+    /**
+     * Normalizuje kontekst fingerprintu
+     *
+     * @param array $context
+     * @return array
+     */
+    private static function normalizeFingerprintContext(array $context): array
+    {
+        $normalized = [];
+
+        foreach ($context as $key => $value) {
+            if ($value === null) {
+                continue;
+            }
+
+            if (is_array($value)) {
+                $value = self::normalizeFingerprintContext($value);
+            }
+
+            $normalized[$key] = $value;
+        }
+
+        ksort($normalized);
+
+        return $normalized;
     }
 }
 
