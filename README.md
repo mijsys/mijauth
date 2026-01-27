@@ -39,6 +39,7 @@ The file contains JSON data, encrypted with AES-256-GCM:
   "token": "random-256-bit-token",
   "created_at": "2024-01-01T00:00:00Z",
   "device_hash": "optional-device-fingerprint",
+    "device_hash_v2": "optional-device-fingerprint-v2",
   "version": 1
 }
 ```
@@ -320,6 +321,7 @@ Plik zawiera dane w formacie JSON, zaszyfrowane AES-256-GCM:
   "token": "losowy-256-bitowy-token",
   "created_at": "2024-01-01T00:00:00Z",
   "device_hash": "opcjonalny-odcisk-urządzenia",
+    "device_hash_v2": "opcjonalny-odcisk-urządzenia-v2",
   "version": 1
 }
 ```
