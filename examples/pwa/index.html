@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MijAuth PWA Demo</title>
+  <link rel="manifest" href="manifest.json" />
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f4f4f4; }
+    .container { max-width: 800px; margin: 24px auto; background: #fff; padding: 20px; border-radius: 8px; }
+    h1 { margin-top: 0; }
+    button { margin: 6px 6px 6px 0; padding: 8px 12px; border: none; border-radius: 6px; cursor: pointer; background: #2563eb; color: #fff; }
+    button.secondary { background: #6b7280; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    .row { margin: 12px 0; }
+    .status { margin: 8px 0; color: #333; }
+    textarea { width: 100%; min-height: 160px; }
+    .muted { color: #666; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>MijAuth PWA Demo (File System Access)</h1>
+    <div class="status">Status: <span id="status">Idle</span></div>
+    <div class="status">FS Access: <span id="fsStatus">Checking...</span></div>
+
+    <div class="row">
+      <button id="pickFile">Pick .mijauth file</button>
+      <button id="readFile" class="secondary">Read file</button>
+      <button id="saveHandle" class="secondary">Remember handle</button>
+      <button id="forgetHandle" class="secondary">Forget handle</button>
+    </div>
+
+    <div class="row">
+      <input type="file" id="fileInput" accept=".mijauth" />
+      <span class="muted">Fallback for browsers without FS Access.</span>
+    </div>
+
+    <div class="row">
+      <textarea id="fileContent" placeholder="File content will appear here..."></textarea>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

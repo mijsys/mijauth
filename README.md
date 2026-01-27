@@ -130,6 +130,24 @@ flutter pub get
 flutter run
 ```
 
+#### PWA (File System Access)
+```bash
+cd examples/pwa
+npx serve .
+```
+
+#### Browser Extension (Edge/Firefox)
+See [examples/extension/README.md](examples/extension/README.md)
+
+#### Desktop Helper (Electron)
+```bash
+cd examples/desktop-helper
+npm install
+npm start
+```
+
+Helper exposes `http://127.0.0.1:7331/fingerprint` for signed device hash.
+
 #### Flutter
 ```bash
 cd examples/flutter
@@ -574,6 +592,24 @@ mijauth/
     │   ├── demo.html            # Browser storage demo
     │   ├── MijAuthStorage.js    # Session/Local/IndexedDB helper
     │   └── MijAuthWebAuthn.js   # WebAuthn helper
+    ├── pwa/
+    │   ├── index.html            # PWA demo UI
+    │   ├── app.js                # File System Access demo
+    │   ├── manifest.json
+    │   ├── sw.js
+    │   └── README.md
+    ├── extension/
+    │   ├── manifest.json         # WebExtension manifest (Edge/Firefox)
+    │   ├── background.js
+    │   ├── content.js
+    │   ├── popup.html
+    │   ├── popup.js
+    │   └── README.md
+    ├── desktop-helper/
+    │   ├── main.js               # Electron app + local server
+    │   ├── ui.html
+    │   ├── package.json
+    │   └── README.md
     ├── php/
     │   ├── MijAuth.php          # Core library / Główna biblioteka
     │   └── example.php          # Usage example / Przykład użycia

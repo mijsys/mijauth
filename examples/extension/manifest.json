@@ -1,0 +1,22 @@
+{
+  "manifest_version": 2,
+  "name": "MijAuth Helper",
+  "version": "0.3.0",
+  "description": "Browser helper for loading .mijauth files and sharing them with your login page.",
+  "permissions": ["storage", "activeTab"],
+  "browser_action": {
+    "default_title": "MijAuth",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

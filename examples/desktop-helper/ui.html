@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MijAuth Helper</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 16px; }
+    h1 { font-size: 18px; margin-top: 0; }
+    .status { margin: 10px 0; }
+    code { font-size: 12px; display: block; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>MijAuth Desktop Helper</h1>
+  <div class="status">Server: <span id="status">Starting...</span></div>
+  <div class="status">Endpoint: http://127.0.0.1:7331/fingerprint</div>
+  <div class="status">Device hash: <code id="hash">loading...</code></div>
+  <script>
+    async function refresh() {
+      try {
+        const response = await fetch('http://127.0.0.1:7331/fingerprint');
+        const data = await response.json();
+        document.getElementById('status').textContent = 'Running';
+        document.getElementById('hash').textContent = data.device_hash;
+      } catch (err) {
+        document.getElementById('status').textContent = 'Error';
+      }
+    }
+
+    refresh();
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "mijauth-desktop-helper",
+  "version": "0.1.0",
+  "description": "MijAuth desktop helper (device fingerprint + signature)",
+  "main": "main.js",
+  "author": "MijagiKutasamoto",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^28.2.0"
+  }
+}
