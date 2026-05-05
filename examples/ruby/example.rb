@@ -24,6 +24,7 @@ user, auth_file_content = db.create_user(user_id, email, password)
 puts "✓ Utworzono użytkownika: #{email}"
 puts "✓ ID użytkownika: #{user_id}"
 puts "✓ Wygenerowano plik .mijauth"
+puts "✓ Włączono kod 2FA z aplikacji (TOTP)"
 
 # Zapisz plik do pobrania
 auth_file_name = "auth_#{user_id}.mijauth"
@@ -74,9 +75,32 @@ else
 end
 
 # ========================================
-# KROK 4: Regeneracja pliku (opcjonalnie)
+# KROK 4: Logowanie - krok 3 (kod z aplikacji 2FA)
 # ========================================
-puts "4. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)"
+puts "4. LOGOWANIE - ETAP 3 (KOD Z APLIKACJI 2FA)"
+puts "-" * 50
+
+provisioning_uri = MijAuth::Auth.get_totp_provisioning_uri(
+  found_user[:email],
+  'MijAuth Demo',
+  found_user[:totp_secret]
+)
+
+app_code = MijAuth::Auth.generate_totp_code(found_user[:totp_secret])
+is_totp_valid = MijAuth::Auth.verify_totp(found_user[:totp_secret], app_code, discrepancy: 1)
+
+if is_totp_valid
+  puts "✓ Kod TOTP poprawny"
+  puts "✓ URI do sparowania aplikacji: #{provisioning_uri}\n\n"
+else
+  puts "✗ Nieprawidłowy kod TOTP"
+  exit 1
+end
+
+# ========================================
+# KROK 5: Regeneracja pliku (opcjonalnie)
+# ========================================
+puts "5. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)"
 puts "-" * 50
 
 new_auth_result = MijAuth::Auth.regenerate_auth_file(user_id, found_user[:encryption_key])
@@ -89,7 +113,7 @@ puts "✓ Wygenerowano nowy plik: #{new_auth_file_name}"
 puts "✓ Stary plik został unieważniony\n\n"
 
 # Test starego pliku (powinien być odrzucony)
-puts "5. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)"
+puts "6. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)"
 puts "-" * 50
 
 found_user = db.get_user(user_id) # Odśwież dane
@@ -107,7 +131,7 @@ else
 end
 
 # Test nowego pliku
-puts "6. TEST NOWEGO PLIKU"
+puts "7. TEST NOWEGO PLIKU"
 puts "-" * 50
 
 new_uploaded_content = File.read(new_auth_file_name)
@@ -127,7 +151,7 @@ end
 # ========================================
 # Podgląd odszyfrowanej zawartości
 # ========================================
-puts "7. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU"
+puts "8. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU"
 puts "-" * 50
 
 decrypted_data = MijAuth::Auth.verify_auth_file(new_uploaded_content, found_user[:encryption_key])

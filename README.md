@@ -9,7 +9,13 @@
 
 ### Description
 
-MijAuth is a two-factor authentication system that uses encrypted files as the second authentication factor. Instead of SMS codes or TOTP apps, the user stores a special `.mijauth` file that must be uploaded during login.
+MijAuth is a two-factor authentication system that uses encrypted files as a strong authentication factor. You can use it standalone (password + `.mijauth`) or combine it with authenticator app codes (TOTP) for higher security.
+
+### Latest Change History
+
+- **0.4.0 (May 2026)**: TOTP app integration, auth-file TTL validation, TOTP rate-limit hooks, updated PHP/Node/Python examples
+- **0.3.0 (January 2026)**: WebAuthn support, mobile persistence, PWA and sync improvements
+- **0.2.0 (December 2025)**: First stable public release
 
 ### How Does It Work?
 
@@ -27,8 +33,9 @@ MijAuth is a two-factor authentication system that uses encrypted files as the s
 1. User enters login and password (first factor)
 2. System requests the `.mijauth` file (second factor)
 3. System decrypts the file using user's key
-4. Verifies if the data in the file matches the database
-5. If everything is OK - user is logged in
+4. Verifies token, user ID and file TTL (`created_at`)
+5. Optional: system verifies TOTP code from authenticator app (third factor)
+6. If everything is OK - user is logged in
 
 #### 3. Structure of .mijauth File
 
@@ -167,6 +174,9 @@ Each implementation provides the same methods:
 | `verifyAuthFileWithToken(...)` | Verifies file against stored token |
 | `verifyAuthFileWithTokenAndDevice(...)` | Verifies file against stored token and device hash (v1/v2) |
 | `regenerateAuthFile(userId, key)` | Generates a new file (invalidates old one) |
+| `generateTotpSecret(length=32)` | Generates Base32 secret for authenticator app |
+| `getTotpProvisioningUri(...)` | Creates `otpauth://` URI for app enrollment |
+| `verifyTotp(secret, code, ...)` | Verifies authenticator app code |
 | `generateDeviceHashV2(...)` | Generates device fingerprint hash v2 |
 | `generateDeviceHashV2FromRequest(...)` | Generates device hash v2 from request headers |
 | `getLibraryVersion()` | Returns the library version string |
@@ -258,9 +268,10 @@ app.post('/login/step2', upload.single('authFile'), (req, res) => {
 
 1. **Store the file securely** - Use encrypted storage (USB with encryption, password manager)
 2. **Create backup files** - Generate files for multiple devices
-3. **Regenerate periodically** - Create new files every few months
-4. **Monitor access** - Log all 2FA verification attempts
-5. **Combine with other factors** - Use together with password and optionally biometrics
+3. **Enforce TTL for auth files** - Keep `created_at` validity limited (for example 30 days)
+4. **Apply rate limiting for TOTP** - Example baseline: 3 failed attempts, then 15-minute lock
+5. **Prefer stable device ID cookie over raw UA fingerprint** - Reduces false logouts after browser updates
+6. **Combine factors** - Use password + `.mijauth` + optional TOTP/biometrics
 
 ### Technical Specifications
 
@@ -274,6 +285,22 @@ app.post('/login/step2', upload.single('authFile'), (req, res) => {
 | File Format | Base64 encoded binary |
 
 ## 📋 Changelog
+
+### Version 0.4.0 (May 2026)
+
+#### 🆕 New Features
+- 🔐 **TOTP App Integration** - Optional authenticator app codes (`otpauth://`, verification helpers)
+- 🧩 **Password + File + App Code Flow** - New `loginWithTotp()` path in PHP `AuthManager`
+- 🗂️ **Auth File TTL Validation** - Built-in `created_at` verification (default: 30 days)
+
+#### 🛠️ Improvements
+- 🔑 Increased default TOTP secret length to 32 Base32 chars (160-bit baseline)
+- 🧠 More stable device fingerprint strategy with optional device cookie identifier
+- 🚦 Built-in in-memory TOTP throttling hooks in `AuthManager` (controller-level rate limiting still recommended)
+
+#### 🐛 Fixes
+- Tightened exception handling around auth file parsing/decryption paths
+- Updated PHP/Node/Python examples to include authenticator app code step
 
 ### Version 0.3.0 (January 2026)
 
@@ -309,7 +336,13 @@ app.post('/login/step2', upload.single('authFile'), (req, res) => {
 
 ### Opis
 
-MijAuth to system weryfikacji dwuetapowej, który wykorzystuje zaszyfrowane pliki jako drugi czynnik uwierzytelniania. Zamiast kodów SMS lub aplikacji TOTP, użytkownik przechowuje specjalny plik `.mijauth`, który musi przesłać podczas logowania.
+MijAuth to system weryfikacji dwuetapowej, który wykorzystuje zaszyfrowane pliki jako silny czynnik uwierzytelniania. Możesz używać go samodzielnie (hasło + `.mijauth`) albo połączyć z kodami TOTP z aplikacji dla wyższego poziomu bezpieczeństwa.
+
+### Ostatnia Historia Zmian
+
+- **0.4.0 (Maj 2026)**: integracja TOTP z aplikacją, walidacja TTL pliku auth, hooki rate-limit dla TOTP, zaktualizowane przykłady PHP/Node/Python
+- **0.3.0 (Styczeń 2026)**: wsparcie WebAuthn, mobile persistence, ulepszenia PWA i synchronizacji
+- **0.2.0 (Grudzień 2025)**: pierwsza stabilna wersja publiczna
 
 ### Jak to działa?
 
@@ -327,8 +360,9 @@ MijAuth to system weryfikacji dwuetapowej, który wykorzystuje zaszyfrowane plik
 1. Użytkownik wpisuje login i hasło (pierwszy czynnik)
 2. System prosi o przesłanie pliku `.mijauth` (drugi czynnik)
 3. System odszyfrowuje plik kluczem użytkownika
-4. Weryfikuje czy dane w pliku zgadzają się z bazą danych
-5. Jeśli wszystko OK - użytkownik zostaje zalogowany
+4. Weryfikuje token, ID użytkownika i TTL pliku (`created_at`)
+5. Opcjonalnie: system sprawdza kod TOTP z aplikacji (trzeci czynnik)
+6. Jeśli wszystko OK - użytkownik zostaje zalogowany
 
 #### 3. Struktura pliku .mijauth
 
@@ -435,6 +469,9 @@ Każda implementacja udostępnia te same metody:
 | `verifyAuthFileWithToken(...)` | Weryfikuje plik względem zapisanego tokenu |
 | `verifyAuthFileWithTokenAndDevice(...)` | Weryfikuje plik względem tokenu i hashy urządzenia (v1/v2) |
 | `regenerateAuthFile(userId, key)` | Generuje nowy plik (unieważnia stary) |
+| `generateTotpSecret(length=32)` | Generuje sekret Base32 do aplikacji uwierzytelniającej |
+| `getTotpProvisioningUri(...)` | Tworzy URI `otpauth://` do parowania aplikacji |
+| `verifyTotp(secret, code, ...)` | Weryfikuje kod z aplikacji TOTP |
 | `generateDeviceHashV2(...)` | Generuje hash fingerprintu urządzenia v2 |
 | `generateDeviceHashV2FromRequest(...)` | Generuje hash v2 na podstawie nagłówków |
 | `getLibraryVersion()` | Zwraca wersję biblioteki |
@@ -528,9 +565,10 @@ if ($_POST['action'] === 'login_step2' && isset($_FILES['authFile'])) {
 
 1. **Przechowuj plik bezpiecznie** - Używaj zaszyfrowanego storage (USB z szyfrowaniem, menedżer haseł)
 2. **Twórz kopie zapasowe** - Generuj pliki dla wielu urządzeń
-3. **Regeneruj okresowo** - Twórz nowe pliki co kilka miesięcy
-4. **Monitoruj dostęp** - Loguj wszystkie próby weryfikacji 2FA
-5. **Łącz z innymi czynnikami** - Używaj razem z hasłem i opcjonalnie biometrią
+3. **Wymuszaj TTL pliku auth** - Ogranicz czas ważności `created_at` (np. 30 dni)
+4. **Stosuj rate limiting dla TOTP** - Przykładowo 3 błędne próby i blokada na 15 minut
+5. **Preferuj stabilny device cookie zamiast surowego UA fingerprintu** - Mniej fałszywych wylogowań po aktualizacji przeglądarki
+6. **Łącz czynniki** - Używaj hasła + `.mijauth` + opcjonalnie TOTP/biometrii
 
 ### Specyfikacja techniczna
 
@@ -544,6 +582,22 @@ if ($_POST['action'] === 'login_step2' && isset($_FILES['authFile'])) {
 | Format pliku | Binarny zakodowany Base64 |
 
 ## 📋 Historia zmian
+
+### Wersja 0.4.0 (Maj 2026)
+
+#### 🆕 Nowe funkcje
+- 🔐 **Integracja TOTP z aplikacją** - Opcjonalne kody z aplikacji uwierzytelniającej (`otpauth://`, helpery weryfikacji)
+- 🧩 **Flow hasło + plik + kod z aplikacji** - Nowa ścieżka `loginWithTotp()` w PHP `AuthManager`
+- 🗂️ **Walidacja TTL pliku auth** - Wbudowana kontrola `created_at` (domyślnie: 30 dni)
+
+#### 🛠️ Ulepszenia
+- 🔑 Domyślna długość sekretu TOTP zwiększona do 32 znaków Base32 (bazowo 160 bitów)
+- 🧠 Stabilniejsza strategia fingerprintu urządzenia z opcjonalnym identyfikatorem cookie
+- 🚦 Wbudowane ograniczanie prób TOTP w `AuthManager` (nadal rekomendowany limiter na poziomie kontrolera)
+
+#### 🐛 Poprawki
+- Zawężono obsługę wyjątków w ścieżce parsowania/odszyfrowania pliku auth
+- Zaktualizowano przykłady PHP/Node/Python o krok kodu z aplikacji TOTP
 
 ### Wersja 0.3.0 (Styczeń 2026)
 
@@ -663,5 +717,3 @@ Zapraszamy do współpracy! Możesz przesłać Pull Request.
 Created with ❤️ for secure authentication.
 
 Stworzone z ❤️ dla bezpiecznej autentykacji.
-
-Commit message: "Update to version 0.3.0 - Enhanced limitations section and added changelog"

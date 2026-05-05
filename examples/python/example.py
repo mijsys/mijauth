@@ -30,6 +30,7 @@ def main():
     print(f"✓ Utworzono użytkownika: {email}")
     print(f"✓ ID użytkownika: {user_id}")
     print("✓ Wygenerowano plik .mijauth")
+    print("✓ Włączono kod 2FA z aplikacji (TOTP)")
 
     # Zapisz plik do pobrania
     auth_file_name = f"auth_{user_id}.mijauth"
@@ -80,9 +81,32 @@ def main():
         return
 
     # ========================================
-    # KROK 4: Regeneracja pliku (opcjonalnie)
+    # KROK 4: Logowanie - krok 3 (kod z aplikacji 2FA)
     # ========================================
-    print("4. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)")
+    print("4. LOGOWANIE - ETAP 3 (KOD Z APLIKACJI 2FA)")
+    print("-" * 50)
+
+    provisioning_uri = MijAuth.get_totp_provisioning_uri(
+        found_user['email'],
+        'MijAuth Demo',
+        found_user['totp_secret']
+    )
+
+    # Symulacja kodu wpisanego przez użytkownika.
+    app_code = MijAuth.generate_totp_code(found_user['totp_secret'])
+    is_totp_valid = MijAuth.verify_totp(found_user['totp_secret'], app_code, 1)
+
+    if is_totp_valid:
+        print("✓ Kod TOTP poprawny")
+        print(f"✓ URI do sparowania aplikacji: {provisioning_uri}\n")
+    else:
+        print("✗ Nieprawidłowy kod TOTP")
+        return
+
+    # ========================================
+    # KROK 5: Regeneracja pliku (opcjonalnie)
+    # ========================================
+    print("5. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)")
     print("-" * 50)
 
     new_file_content, new_token = MijAuth.regenerate_auth_file(
@@ -99,7 +123,7 @@ def main():
     print("✓ Stary plik został unieważniony\n")
 
     # Test starego pliku (powinien być odrzucony)
-    print("5. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)")
+    print("6. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)")
     print("-" * 50)
 
     found_user = db.get_user(user_id)  # Odśwież dane
@@ -116,7 +140,7 @@ def main():
         print("✗ BŁĄD: Stary plik nie powinien działać!")
 
     # Test nowego pliku
-    print("6. TEST NOWEGO PLIKU")
+    print("7. TEST NOWEGO PLIKU")
     print("-" * 50)
 
     with open(new_auth_file_name, 'r') as f:
@@ -137,7 +161,7 @@ def main():
     # ========================================
     # Podgląd odszyfrowanej zawartości
     # ========================================
-    print("7. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU")
+    print("8. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU")
     print("-" * 50)
 
     decrypted_data = MijAuth.verify_auth_file(
