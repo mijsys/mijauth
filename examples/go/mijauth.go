@@ -8,16 +8,21 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/subtle"
 	"bytes"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,6 +32,7 @@ const (
 	IVLength  = 12 // 96 bits dla GCM
 	TagLength = 16 // 128 bits
 	Version   = 1
+	DefaultAuthFileTTLSeconds = 30 * 24 * 60 * 60
 )
 
 // AuthPayload struktura danych w pliku .mijauth
@@ -46,6 +52,7 @@ type User struct {
 	PasswordHash  string `json:"password_hash"`
 	EncryptionKey string `json:"encryption_key"`
 	AuthToken     string `json:"auth_token"`
+	TotpSecret    string `json:"totp_secret"`
 	CreatedAt     string `json:"created_at"`
 }
 
@@ -100,7 +107,7 @@ func (m *MijAuth) CreateAuthFile(userID, userKeyBase64 string, deviceHash *strin
 }
 
 // VerifyAuthFile weryfikuje plik autoryzacyjny i zwraca dane użytkownika
-func (m *MijAuth) VerifyAuthFile(fileContent, userKeyBase64 string) (*AuthPayload, error) {
+func (m *MijAuth) VerifyAuthFile(fileContent, userKeyBase64 string, maxAgeSeconds ...int) (*AuthPayload, error) {
 	decrypted, err := m.decrypt(fileContent, userKeyBase64)
 	if err != nil {
 		return nil, err
@@ -116,12 +123,29 @@ func (m *MijAuth) VerifyAuthFile(fileContent, userKeyBase64 string) (*AuthPayloa
 		return nil, fmt.Errorf("invalid payload structure")
 	}
 
+	ttl := DefaultAuthFileTTLSeconds
+	if len(maxAgeSeconds) > 0 {
+		ttl = maxAgeSeconds[0]
+	}
+
+	if ttl > 0 {
+		createdAt, err := time.Parse(time.RFC3339, payload.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("invalid created_at")
+		}
+
+		now := time.Now().UTC()
+		if createdAt.After(now) || int(now.Sub(createdAt).Seconds()) > ttl {
+			return nil, fmt.Errorf("auth file expired")
+		}
+	}
+
 	return &payload, nil
 }
 
 // VerifyAuthFileWithToken weryfikuje plik i sprawdza czy token zgadza się
-func (m *MijAuth) VerifyAuthFileWithToken(fileContent, userKeyBase64, expectedToken, expectedUserID string) bool {
-	payload, err := m.VerifyAuthFile(fileContent, userKeyBase64)
+func (m *MijAuth) VerifyAuthFileWithToken(fileContent, userKeyBase64, expectedToken, expectedUserID string, maxAgeSeconds ...int) bool {
+	payload, err := m.VerifyAuthFile(fileContent, userKeyBase64, maxAgeSeconds...)
 	if err != nil {
 		return false
 	}
@@ -131,6 +155,72 @@ func (m *MijAuth) VerifyAuthFileWithToken(fileContent, userKeyBase64, expectedTo
 	userIDMatch := subtle.ConstantTimeCompare([]byte(expectedUserID), []byte(payload.UserID)) == 1
 
 	return tokenMatch && userIDMatch
+}
+
+// GenerateTotpSecret generuje sekret TOTP Base32
+func (m *MijAuth) GenerateTotpSecret(length int) (string, error) {
+	if length < 16 {
+		return "", fmt.Errorf("totp secret length must be at least 16")
+	}
+
+	alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+
+	var builder strings.Builder
+	builder.Grow(length)
+	for i := 0; i < length; i++ {
+		builder.WriteByte(alphabet[int(bytes[i])%len(alphabet)])
+	}
+
+	return builder.String(), nil
+}
+
+// GetTotpProvisioningURI tworzy URI otpauth do sparowania aplikacji
+func (m *MijAuth) GetTotpProvisioningURI(accountName, issuer, secret string, digits, period int) string {
+	label := url.PathEscape(issuer + ":" + accountName)
+	query := url.Values{}
+	query.Set("secret", strings.ToUpper(secret))
+	query.Set("issuer", issuer)
+	query.Set("algorithm", "SHA1")
+	query.Set("digits", strconv.Itoa(digits))
+	query.Set("period", strconv.Itoa(period))
+
+	return "otpauth://totp/" + label + "?" + query.Encode()
+}
+
+// GenerateTotpCode generuje kod TOTP dla podanego czasu
+func (m *MijAuth) GenerateTotpCode(secret string, timestamp time.Time, period, digits int) (string, error) {
+	counter := timestamp.Unix() / int64(period)
+	return generateHotpCode(secret, counter, digits)
+}
+
+// VerifyTotp weryfikuje kod TOTP z tolerancją okien czasowych
+func (m *MijAuth) VerifyTotp(secret, code string, discrepancy int, timestamp time.Time, period, digits int) bool {
+	normalizedCode := strings.ReplaceAll(strings.TrimSpace(code), " ", "")
+	if len(normalizedCode) != digits {
+		return false
+	}
+	for _, ch := range normalizedCode {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+
+	baseCounter := timestamp.Unix() / int64(period)
+	for offset := -discrepancy; offset <= discrepancy; offset++ {
+		candidate, err := generateHotpCode(secret, baseCounter+int64(offset), digits)
+		if err != nil {
+			return false
+		}
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(normalizedCode)) == 1 {
+			return true
+		}
+	}
+
+	return false
 }
 
 // VerifyAuthFileWithTokenAndDevice weryfikuje plik, token i hash urządzenia (v1/v2)
@@ -309,6 +399,11 @@ func (db *UserDatabase) CreateUser(userID, email, password string) (*User, strin
 		return nil, "", err
 	}
 
+	totpSecret, err := auth.GenerateTotpSecret(32)
+	if err != nil {
+		return nil, "", err
+	}
+
 	// Hash hasła (w produkcji użyj bcrypt lub argon2)
 	passwordHash := sha256.Sum256([]byte(password + "salt_" + userID))
 
@@ -318,6 +413,7 @@ func (db *UserDatabase) CreateUser(userID, email, password string) (*User, strin
 		PasswordHash:  hex.EncodeToString(passwordHash[:]),
 		EncryptionKey: userKey,
 		AuthToken:     token,
+		TotpSecret:    totpSecret,
 		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -443,4 +539,42 @@ func writeSortedJSON(buffer *bytes.Buffer, value interface{}) error {
 	}
 
 	return nil
+}
+
+func generateHotpCode(secret string, counter int64, digits int) (string, error) {
+	if counter < 0 {
+		return strings.Repeat("0", digits), nil
+	}
+
+	decoder := base32.StdEncoding.WithPadding(base32.NoPadding)
+	key, err := decoder.DecodeString(strings.ToUpper(strings.ReplaceAll(secret, " ", "")))
+	if err != nil || len(key) == 0 {
+		return "", fmt.Errorf("invalid totp secret")
+	}
+
+	var ctr [8]byte
+	for i := 7; i >= 0; i-- {
+		ctr[i] = byte(counter & 0xff)
+		counter >>= 8
+	}
+
+	h := hmac.New(sha1.New, key)
+	if _, err := h.Write(ctr[:]); err != nil {
+		return "", err
+	}
+	hash := h.Sum(nil)
+	offset := hash[len(hash)-1] & 0x0f
+
+	binary := (int(hash[offset]&0x7f) << 24) |
+		(int(hash[offset+1]&0xff) << 16) |
+		(int(hash[offset+2]&0xff) << 8) |
+		int(hash[offset+3]&0xff)
+
+	mod := 1
+	for i := 0; i < digits; i++ {
+		mod *= 10
+	}
+	code := binary % mod
+
+	return fmt.Sprintf("%0*d", digits, code), nil
 }

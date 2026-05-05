@@ -25,7 +25,12 @@ class MijAuth
     private const IV_LENGTH = 12;  // 96 bits for GCM
     private const TAG_LENGTH = 16; // 128 bits
     private const VERSION = 1;
-    private const LIB_VERSION = '0.3.0';
+    private const LIB_VERSION = '0.4.0';
+    private const DEFAULT_AUTH_FILE_TTL_SECONDS = 2592000; // 30 days
+    private const DEFAULT_TOTP_PERIOD = 30;
+    private const DEFAULT_TOTP_DIGITS = 6;
+    private const DEFAULT_TOTP_ALGORITHM = 'SHA1';
+    private const DEVICE_ID_COOKIE_NAME = 'mijauth_device_id';
 
     /**
      * Generate a new AES-256 key for a user
@@ -94,7 +99,8 @@ class MijAuth
      */
     public static function verifyAuthFile(
         string $fileContent,
-        string $userKeyBase64
+        string $userKeyBase64,
+        ?int $maxAgeSeconds = self::DEFAULT_AUTH_FILE_TTL_SECONDS
     ): ?array {
         try {
             $decrypted = self::decrypt($fileContent, $userKeyBase64);
@@ -110,8 +116,12 @@ class MijAuth
                 return null;
             }
 
+            if (!self::isAuthFileWithinTtl($payload, $maxAgeSeconds)) {
+                return null;
+            }
+
             return $payload;
-        } catch (\Exception $e) {
+        } catch (JsonException | RuntimeException $e) {
             return null;
         }
     }
@@ -129,9 +139,10 @@ class MijAuth
         string $fileContent,
         string $userKeyBase64,
         string $expectedToken,
-        string $expectedUserId
+        string $expectedUserId,
+        ?int $maxAgeSeconds = self::DEFAULT_AUTH_FILE_TTL_SECONDS
     ): bool {
-        $payload = self::verifyAuthFile($fileContent, $userKeyBase64);
+        $payload = self::verifyAuthFile($fileContent, $userKeyBase64, $maxAgeSeconds);
         
         if ($payload === null) {
             return false;
@@ -159,9 +170,10 @@ class MijAuth
         string $expectedToken,
         string $expectedUserId,
         ?string $expectedDeviceHash = null,
-        ?string $expectedDeviceHashV2 = null
+        ?string $expectedDeviceHashV2 = null,
+        ?int $maxAgeSeconds = self::DEFAULT_AUTH_FILE_TTL_SECONDS
     ): bool {
-        $payload = self::verifyAuthFile($fileContent, $userKeyBase64);
+        $payload = self::verifyAuthFile($fileContent, $userKeyBase64, $maxAgeSeconds);
 
         if ($payload === null) {
             return false;
@@ -221,7 +233,7 @@ class MijAuth
         array $additionalData = []
     ): string {
         $data = array_merge([
-            'user_agent' => $userAgent,
+            'user_agent' => self::normalizeUserAgent($userAgent),
             'accept_language' => $acceptLanguage,
         ], $additionalData);
 
@@ -237,8 +249,156 @@ class MijAuth
     {
         return self::generateDeviceHash(
             $_SERVER['HTTP_USER_AGENT'] ?? '',
-            $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''
+            $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
+            [
+                'device_id' => $_COOKIE[self::DEVICE_ID_COOKIE_NAME] ?? '',
+                'platform' => PHP_OS_FAMILY
+            ]
         );
+    }
+
+    /**
+     * Generate stable random device identifier (for device cookie)
+     *
+     * @return string
+     */
+    public static function generateDeviceId(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * Generate Base32 TOTP secret (RFC 4226/6238)
+     *
+     * @param int $length Length in Base32 chars (32 chars ~= 160 bits)
+     * @return string
+     */
+    public static function generateTotpSecret(int $length = 32): string
+    {
+        if ($length < 16) {
+            throw new RuntimeException('TOTP secret length must be at least 16 Base32 chars');
+        }
+
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        $bytes = random_bytes($length);
+        $secret = '';
+
+        for ($i = 0; $i < $length; $i++) {
+            $secret .= $alphabet[ord($bytes[$i]) % 32];
+        }
+
+        return $secret;
+    }
+
+    /**
+     * Build otpauth provisioning URI for authenticator apps
+     *
+     * @param string $accountName e.g. user@example.com
+     * @param string $issuer e.g. MijAuth Demo
+     * @param string $secret Base32 secret
+     * @param int $digits TOTP digits
+     * @param int $period TOTP period in seconds
+     * @param string $algorithm SHA1|SHA256|SHA512
+     * @return string
+     */
+    public static function getTotpProvisioningUri(
+        string $accountName,
+        string $issuer,
+        string $secret,
+        int $digits = self::DEFAULT_TOTP_DIGITS,
+        int $period = self::DEFAULT_TOTP_PERIOD,
+        string $algorithm = self::DEFAULT_TOTP_ALGORITHM
+    ): string {
+        $normalizedAlgorithm = self::normalizeTotpAlgorithm($algorithm);
+        $label = rawurlencode($issuer . ':' . $accountName);
+
+        $query = http_build_query([
+            'secret' => strtoupper($secret),
+            'issuer' => $issuer,
+            'algorithm' => $normalizedAlgorithm,
+            'digits' => $digits,
+            'period' => $period
+        ]);
+
+        return 'otpauth://totp/' . $label . '?' . $query;
+    }
+
+    /**
+     * Convenience URL for QR rendering (Google Chart API)
+     *
+     * @param string $provisioningUri otpauth URI
+     * @param int $size QR image size
+     * @return string
+     */
+    public static function getTotpQrCodeUrl(string $provisioningUri, int $size = 220): string
+    {
+        $safeSize = max(100, min(600, $size));
+        return 'https://chart.googleapis.com/chart?cht=qr&chs=' . $safeSize . 'x' . $safeSize
+            . '&chl=' . rawurlencode($provisioningUri);
+    }
+
+    /**
+     * Generate TOTP code for current time window
+     *
+     * @param string $secret Base32 secret
+     * @param int|null $timestamp Unix timestamp
+     * @param int $period Time step in seconds
+     * @param int $digits OTP digits
+     * @param string $algorithm SHA1|SHA256|SHA512
+     * @return string
+     */
+    public static function generateTotpCode(
+        string $secret,
+        ?int $timestamp = null,
+        int $period = self::DEFAULT_TOTP_PERIOD,
+        int $digits = self::DEFAULT_TOTP_DIGITS,
+        string $algorithm = self::DEFAULT_TOTP_ALGORITHM
+    ): string {
+        $time = $timestamp ?? time();
+        $counter = intdiv($time, $period);
+
+        return self::calculateHotp($secret, $counter, $digits, $algorithm);
+    }
+
+    /**
+     * Verify TOTP code in a configurable time window
+     *
+     * @param string $secret Base32 secret
+     * @param string $code User provided OTP
+     * @param int $discrepancy Allowed time windows on both sides
+     * @param int|null $timestamp Unix timestamp
+     * @param int $period Time step in seconds
+     * @param int $digits OTP digits
+     * @param string $algorithm SHA1|SHA256|SHA512
+     * @return bool
+     */
+    public static function verifyTotp(
+        string $secret,
+        string $code,
+        int $discrepancy = 1,
+        ?int $timestamp = null,
+        int $period = self::DEFAULT_TOTP_PERIOD,
+        int $digits = self::DEFAULT_TOTP_DIGITS,
+        string $algorithm = self::DEFAULT_TOTP_ALGORITHM
+    ): bool {
+        $normalizedCode = preg_replace('/\s+/', '', $code) ?? '';
+
+        if (!preg_match('/^\d{' . $digits . '}$/', $normalizedCode)) {
+            return false;
+        }
+
+        $time = $timestamp ?? time();
+        $counter = intdiv($time, $period);
+
+        for ($offset = -$discrepancy; $offset <= $discrepancy; $offset++) {
+            $candidate = self::calculateHotp($secret, $counter + $offset, $digits, $algorithm);
+
+            if (hash_equals($candidate, $normalizedCode)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -401,6 +561,141 @@ class MijAuth
         }
 
         ksort($normalized);
+
+        return $normalized;
+    }
+
+    /**
+     * @param array $payload
+     * @param int|null $maxAgeSeconds
+     * @return bool
+     */
+    private static function isAuthFileWithinTtl(array $payload, ?int $maxAgeSeconds): bool
+    {
+        if ($maxAgeSeconds === null) {
+            return true;
+        }
+
+        if (!isset($payload['created_at']) || !is_string($payload['created_at'])) {
+            return false;
+        }
+
+        $createdAt = strtotime($payload['created_at']);
+
+        if ($createdAt === false) {
+            return false;
+        }
+
+        if ($createdAt > time()) {
+            return false;
+        }
+
+        return (time() - $createdAt) <= $maxAgeSeconds;
+    }
+
+    /**
+     * @param string $userAgent
+     * @return string
+     */
+    private static function normalizeUserAgent(string $userAgent): string
+    {
+        if ($userAgent === '') {
+            return '';
+        }
+
+        if (preg_match('/(Chrome|Firefox|Safari|Edg|OPR)\/(\d+)/i', $userAgent, $matches)) {
+            return strtoupper($matches[1]) . '/' . $matches[2];
+        }
+
+        return substr($userAgent, 0, 80);
+    }
+
+    /**
+     * @param string $secret
+     * @param int $counter
+     * @param int $digits
+     * @param string $algorithm
+     * @return string
+     */
+    private static function calculateHotp(
+        string $secret,
+        int $counter,
+        int $digits,
+        string $algorithm
+    ): string {
+        if ($counter < 0) {
+            return str_repeat('0', $digits);
+        }
+
+        $binarySecret = self::base32Decode($secret);
+
+        if ($binarySecret === '') {
+            throw new RuntimeException('Invalid TOTP secret');
+        }
+
+        $normalizedAlgorithm = strtolower(self::normalizeTotpAlgorithm($algorithm));
+        $counterBinary = pack('N*', 0, $counter);
+        $hash = hash_hmac($normalizedAlgorithm, $counterBinary, $binarySecret, true);
+        $offset = ord(substr($hash, -1)) & 0x0F;
+
+        $truncated = (
+            ((ord($hash[$offset]) & 0x7F) << 24)
+            | ((ord($hash[$offset + 1]) & 0xFF) << 16)
+            | ((ord($hash[$offset + 2]) & 0xFF) << 8)
+            | (ord($hash[$offset + 3]) & 0xFF)
+        );
+
+        $otp = (string) ($truncated % (10 ** $digits));
+
+        return str_pad($otp, $digits, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * @param string $secret
+     * @return string
+     */
+    private static function base32Decode(string $secret): string
+    {
+        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+        $lookup = array_flip(str_split($alphabet));
+        $normalized = strtoupper(str_replace('=', '', preg_replace('/\s+/', '', $secret) ?? ''));
+
+        if ($normalized === '') {
+            return '';
+        }
+
+        $bits = '';
+
+        foreach (str_split($normalized) as $char) {
+            if (!isset($lookup[$char])) {
+                return '';
+            }
+
+            $bits .= str_pad(decbin($lookup[$char]), 5, '0', STR_PAD_LEFT);
+        }
+
+        $decoded = '';
+        $length = strlen($bits);
+
+        for ($i = 0; $i + 8 <= $length; $i += 8) {
+            $decoded .= chr(bindec(substr($bits, $i, 8)));
+        }
+
+        return $decoded;
+    }
+
+    /**
+     * @param string $algorithm
+     * @return string
+     */
+    private static function normalizeTotpAlgorithm(string $algorithm): string
+    {
+        $normalized = strtoupper(trim($algorithm));
+        $allowed = ['SHA1', 'SHA256', 'SHA512'];
+
+        if (!in_array($normalized, $allowed, true)) {
+            throw new RuntimeException('Unsupported TOTP algorithm');
+        }
 
         return $normalized;
     }

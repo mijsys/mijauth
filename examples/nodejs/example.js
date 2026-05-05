@@ -28,6 +28,7 @@ async function main() {
     console.log(`✓ Utworzono użytkownika: ${email}`);
     console.log(`✓ ID użytkownika: ${userId}`);
     console.log('✓ Wygenerowano plik .mijauth');
+    console.log('✓ Włączono kod 2FA z aplikacji (TOTP)');
 
     // Zapisz plik do pobrania
     const authFileName = `auth_${userId}.mijauth`;
@@ -78,9 +79,33 @@ async function main() {
     }
 
     // ========================================
-    // KROK 4: Regeneracja pliku (opcjonalnie)
+    // KROK 4: Logowanie - krok 3 (kod z aplikacji 2FA)
     // ========================================
-    console.log('4. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)');
+    console.log('4. LOGOWANIE - ETAP 3 (KOD Z APLIKACJI 2FA)');
+    console.log('-'.repeat(50));
+
+    const provisioningUri = MijAuth.getTotpProvisioningUri(
+        user.email,
+        'MijAuth Demo',
+        user.totp_secret
+    );
+
+    // Symulacja wpisania kodu z aplikacji (w realnym flow wpisuje go użytkownik).
+    const appCode = MijAuth.generateTotpCode(user.totp_secret);
+    const isTotpValid = MijAuth.verifyTotp(user.totp_secret, appCode, 1);
+
+    if (isTotpValid) {
+        console.log('✓ Kod TOTP poprawny');
+        console.log(`✓ URI do sparowania aplikacji: ${provisioningUri}\n`);
+    } else {
+        console.log('✗ Nieprawidłowy kod TOTP');
+        process.exit(1);
+    }
+
+    // ========================================
+    // KROK 5: Regeneracja pliku (opcjonalnie)
+    // ========================================
+    console.log('5. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)');
     console.log('-'.repeat(50));
 
     const newAuthResult = MijAuth.regenerateAuthFile(userId, user.encryption_key);
@@ -93,7 +118,7 @@ async function main() {
     console.log('✓ Stary plik został unieważniony\n');
 
     // Test starego pliku (powinien być odrzucony)
-    console.log('5. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)');
+    console.log('6. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)');
     console.log('-'.repeat(50));
 
     user = db.getUser(userId); // Odśwież dane
@@ -111,7 +136,7 @@ async function main() {
     }
 
     // Test nowego pliku
-    console.log('6. TEST NOWEGO PLIKU');
+    console.log('7. TEST NOWEGO PLIKU');
     console.log('-'.repeat(50));
 
     const newFileContent = fs.readFileSync(newAuthFileName, 'utf8');
@@ -131,7 +156,7 @@ async function main() {
     // ========================================
     // Podgląd odszyfrowanej zawartości
     // ========================================
-    console.log('7. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU');
+    console.log('8. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU');
     console.log('-'.repeat(50));
 
     const decryptedData = MijAuth.verifyAuthFile(newFileContent, user.encryption_key);

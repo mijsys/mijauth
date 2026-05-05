@@ -22,6 +22,7 @@ namespace MijAuth
         private const int IvLength = 12;   // 96 bits dla GCM
         private const int TagLength = 16;  // 128 bits
         private const int Version = 1;
+        private const int DefaultAuthFileTtlSeconds = 30 * 24 * 60 * 60;
 
         /// <summary>
         /// Generuje nowy klucz AES-256 dla użytkownika
@@ -82,7 +83,7 @@ namespace MijAuth
         /// <param name="fileContent">Zawartość pliku .mijauth</param>
         /// <param name="userKeyBase64">Klucz użytkownika w base64</param>
         /// <returns>Dane użytkownika lub null</returns>
-        public static AuthPayload? VerifyAuthFile(string fileContent, string userKeyBase64)
+        public static AuthPayload? VerifyAuthFile(string fileContent, string userKeyBase64, int? maxAgeSeconds = DefaultAuthFileTtlSeconds)
         {
             try
             {
@@ -99,6 +100,19 @@ namespace MijAuth
                     string.IsNullOrEmpty(payload.Token))
                 {
                     return null;
+                }
+
+                if (maxAgeSeconds.HasValue)
+                {
+                    if (!DateTimeOffset.TryParse(payload.CreatedAt, out var createdAt))
+                        return null;
+
+                    var now = DateTimeOffset.UtcNow;
+                    if (createdAt > now)
+                        return null;
+
+                    if ((now - createdAt).TotalSeconds > maxAgeSeconds.Value)
+                        return null;
                 }
 
                 return payload;
@@ -121,9 +135,10 @@ namespace MijAuth
             string fileContent,
             string userKeyBase64,
             string expectedToken,
-            string expectedUserId)
+            string expectedUserId,
+            int? maxAgeSeconds = DefaultAuthFileTtlSeconds)
         {
-            var payload = VerifyAuthFile(fileContent, userKeyBase64);
+            var payload = VerifyAuthFile(fileContent, userKeyBase64, maxAgeSeconds);
 
             if (payload == null)
                 return false;
@@ -135,6 +150,75 @@ namespace MijAuth
                    CryptographicOperations.FixedTimeEquals(
                        Encoding.UTF8.GetBytes(expectedUserId),
                        Encoding.UTF8.GetBytes(payload.UserId));
+        }
+
+        /// <summary>
+        /// Generuje sekret TOTP Base32
+        /// </summary>
+        public static string GenerateTotpSecret(int length = 32)
+        {
+            if (length < 16)
+                throw new ArgumentException("Sekret TOTP musi mieć co najmniej 16 znaków", nameof(length));
+
+            const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+            var bytes = RandomNumberGenerator.GetBytes(length);
+            var chars = new char[length];
+
+            for (var i = 0; i < length; i++)
+                chars[i] = alphabet[bytes[i] % alphabet.Length];
+
+            return new string(chars);
+        }
+
+        /// <summary>
+        /// Tworzy URI otpauth do sparowania aplikacji
+        /// </summary>
+        public static string GetTotpProvisioningUri(string accountName, string issuer, string secret, int digits = 6, int period = 30)
+        {
+            var label = Uri.EscapeDataString($"{issuer}:{accountName}");
+            var query = $"secret={Uri.EscapeDataString(secret.ToUpperInvariant())}" +
+                        $"&issuer={Uri.EscapeDataString(issuer)}" +
+                        "&algorithm=SHA1" +
+                        $"&digits={digits}" +
+                        $"&period={period}";
+
+            return $"otpauth://totp/{label}?{query}";
+        }
+
+        /// <summary>
+        /// Generuje kod TOTP
+        /// </summary>
+        public static string GenerateTotpCode(string secret, DateTimeOffset? timestamp = null, int period = 30, int digits = 6)
+        {
+            var ts = timestamp ?? DateTimeOffset.UtcNow;
+            var counter = ts.ToUnixTimeSeconds() / period;
+            return GenerateHotpCode(secret, counter, digits);
+        }
+
+        /// <summary>
+        /// Weryfikuje kod TOTP
+        /// </summary>
+        public static bool VerifyTotp(string secret, string code, int discrepancy = 1, DateTimeOffset? timestamp = null, int period = 30, int digits = 6)
+        {
+            var normalizedCode = code.Replace(" ", "", StringComparison.Ordinal);
+            if (normalizedCode.Length != digits || !normalizedCode.All(char.IsDigit))
+                return false;
+
+            var ts = timestamp ?? DateTimeOffset.UtcNow;
+            var counter = ts.ToUnixTimeSeconds() / period;
+
+            for (var offset = -discrepancy; offset <= discrepancy; offset++)
+            {
+                var candidate = GenerateHotpCode(secret, counter + offset, digits);
+                if (CryptographicOperations.FixedTimeEquals(
+                        Encoding.UTF8.GetBytes(candidate),
+                        Encoding.UTF8.GetBytes(normalizedCode)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -305,6 +389,62 @@ namespace MijAuth
 
             return new Dictionary<string, object?>(normalized);
         }
+
+        private static string GenerateHotpCode(string secret, long counter, int digits)
+        {
+            if (counter < 0)
+                return new string('0', digits);
+
+            var key = Base32Decode(secret);
+            if (key.Length == 0)
+                throw new ArgumentException("Nieprawidłowy sekret TOTP", nameof(secret));
+
+            var counterBytes = BitConverter.GetBytes(counter);
+            if (BitConverter.IsLittleEndian)
+                Array.Reverse(counterBytes);
+
+            using var hmac = new HMACSHA1(key);
+            var hash = hmac.ComputeHash(counterBytes);
+            var offset = hash[^1] & 0x0f;
+
+            var binary = ((hash[offset] & 0x7f) << 24)
+                       | ((hash[offset + 1] & 0xff) << 16)
+                       | ((hash[offset + 2] & 0xff) << 8)
+                       | (hash[offset + 3] & 0xff);
+
+            var mod = (int)Math.Pow(10, digits);
+            var otp = binary % mod;
+
+            return otp.ToString(new string('0', digits));
+        }
+
+        private static byte[] Base32Decode(string secret)
+        {
+            const string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+            var normalized = secret.Replace("=", string.Empty, StringComparison.Ordinal)
+                .Replace(" ", string.Empty, StringComparison.Ordinal)
+                .ToUpperInvariant();
+
+            var bits = new StringBuilder(normalized.Length * 5);
+
+            foreach (var c in normalized)
+            {
+                var idx = alphabet.IndexOf(c);
+                if (idx < 0)
+                    return Array.Empty<byte>();
+
+                bits.Append(Convert.ToString(idx, 2).PadLeft(5, '0'));
+            }
+
+            using var stream = new MemoryStream();
+            for (var i = 0; i + 8 <= bits.Length; i += 8)
+            {
+                var chunk = bits.ToString(i, 8);
+                stream.WriteByte(Convert.ToByte(chunk, 2));
+            }
+
+            return stream.ToArray();
+        }
     }
 
     /// <summary>
@@ -330,6 +470,7 @@ namespace MijAuth
         public string PasswordHash { get; set; } = "";
         public string EncryptionKey { get; set; } = "";
         public string AuthToken { get; set; } = "";
+        public string TotpSecret { get; set; } = "";
         public string CreatedAt { get; set; } = "";
     }
 
@@ -369,6 +510,7 @@ namespace MijAuth
         {
             var userKey = MijAuthService.GenerateUserKey();
             var (fileContent, token) = MijAuthService.CreateAuthFile(userId, userKey, null, null);
+            var totpSecret = MijAuthService.GenerateTotpSecret();
 
             // Hash hasła (w produkcji użyj BCrypt lub Argon2)
             var passwordHash = Convert.ToHexString(
@@ -382,6 +524,7 @@ namespace MijAuth
                 PasswordHash = passwordHash,
                 EncryptionKey = userKey,
                 AuthToken = token,
+                TotpSecret = totpSecret,
                 CreatedAt = DateTime.UtcNow.ToString("o")
             };
 
