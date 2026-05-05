@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 )
 
 func main() {
@@ -35,7 +34,6 @@ func main() {
 	fmt.Printf("✓ Utworzono użytkownika: %s\n", email)
 	fmt.Printf("✓ ID użytkownika: %s\n", userID)
 	fmt.Println("✓ Wygenerowano plik .mijauth")
-	fmt.Println("✓ Włączono kod 2FA z aplikacji (TOTP)")
 
 	// Zapisz plik do pobrania
 	authFileName := fmt.Sprintf("auth_%s.mijauth", userID)
@@ -86,27 +84,9 @@ func main() {
 	}
 
 	// ========================================
-	// KROK 4: Logowanie - krok 3 (kod z aplikacji 2FA)
+	// KROK 4: Regeneracja pliku (opcjonalnie)
 	// ========================================
-	fmt.Println("4. LOGOWANIE - ETAP 3 (KOD Z APLIKACJI 2FA)")
-	fmt.Println(strings.Repeat("-", 50))
-
-	provisioningURI := auth.GetTotpProvisioningURI(foundUser.Email, "MijAuth Demo", foundUser.TotpSecret, 6, 30)
-	appCode, _ := auth.GenerateTotpCode(foundUser.TotpSecret, time.Now().UTC(), 30, 6)
-	isTotpValid := auth.VerifyTotp(foundUser.TotpSecret, appCode, 1, time.Now().UTC(), 30, 6)
-
-	if isTotpValid {
-		fmt.Println("✓ Kod TOTP poprawny")
-		fmt.Printf("✓ URI do sparowania aplikacji: %s\n\n", provisioningURI)
-	} else {
-		fmt.Println("✗ Nieprawidłowy kod TOTP")
-		return
-	}
-
-	// ========================================
-	// KROK 5: Regeneracja pliku (opcjonalnie)
-	// ========================================
-	fmt.Println("5. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)")
+	fmt.Println("4. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)")
 	fmt.Println(strings.Repeat("-", 50))
 
 	newFileContent, newToken, _ := auth.RegenerateAuthFile(userID, user.EncryptionKey, nil)
@@ -119,7 +99,7 @@ func main() {
 	fmt.Println("✓ Stary plik został unieważniony\n")
 
 	// Test starego pliku (powinien być odrzucony)
-	fmt.Println("6. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)")
+	fmt.Println("5. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)")
 	fmt.Println(strings.Repeat("-", 50))
 
 	foundUser = db.GetUser(userID) // Odśwież dane
@@ -137,7 +117,7 @@ func main() {
 	}
 
 	// Test nowego pliku
-	fmt.Println("7. TEST NOWEGO PLIKU")
+	fmt.Println("6. TEST NOWEGO PLIKU")
 	fmt.Println(strings.Repeat("-", 50))
 
 	newUploadedContent, _ := os.ReadFile(newAuthFileName)
@@ -157,7 +137,7 @@ func main() {
 	// ========================================
 	// Podgląd odszyfrowanej zawartości
 	// ========================================
-	fmt.Println("8. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU")
+	fmt.Println("7. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU")
 	fmt.Println(strings.Repeat("-", 50))
 
 	decryptedData, _ := auth.VerifyAuthFile(string(newUploadedContent), foundUser.EncryptionKey)

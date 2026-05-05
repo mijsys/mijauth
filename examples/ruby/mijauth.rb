@@ -9,7 +9,6 @@ require 'base64'
 require 'json'
 require 'time'
 require 'digest'
-require 'uri'
 
 module MijAuth
   # Główna klasa systemu MijAuth do weryfikacji dwuetapowej
@@ -18,7 +17,6 @@ module MijAuth
     IV_LENGTH = 12    # 96 bits dla GCM
     TAG_LENGTH = 16   # 128 bits
     VERSION = 1
-    DEFAULT_AUTH_FILE_TTL_SECONDS = 30 * 24 * 60 * 60
 
     class << self
       # Generuje nowy klucz AES-256 dla użytkownika
@@ -64,7 +62,7 @@ module MijAuth
       # @param file_content [String] Zawartość pliku .mijauth
       # @param user_key_base64 [String] Klucz użytkownika w base64
       # @return [Hash, nil] Dane użytkownika lub nil
-      def verify_auth_file(file_content, user_key_base64, max_age_seconds = DEFAULT_AUTH_FILE_TTL_SECONDS)
+      def verify_auth_file(file_content, user_key_base64)
         decrypted = decrypt(file_content, user_key_base64)
         return nil if decrypted.nil?
 
@@ -73,14 +71,8 @@ module MijAuth
         # Walidacja struktury
         return nil unless payload[:user_id] && payload[:token] && payload[:version]
 
-        if max_age_seconds
-          created_at = Time.iso8601(payload[:created_at].to_s)
-          return nil if created_at > Time.now.utc
-          return nil if (Time.now.utc - created_at) > max_age_seconds
-        end
-
         payload
-      rescue JSON::ParserError, OpenSSL::Cipher::CipherError, ArgumentError
+      rescue JSON::ParserError, OpenSSL::Cipher::CipherError
         nil
       end
 
@@ -91,8 +83,8 @@ module MijAuth
       # @param expected_token [String] Oczekiwany token z bazy danych
       # @param expected_user_id [String] Oczekiwane ID użytkownika
       # @return [Boolean]
-      def verify_auth_file_with_token(file_content, user_key_base64, expected_token, expected_user_id, max_age_seconds = DEFAULT_AUTH_FILE_TTL_SECONDS)
-        payload = verify_auth_file(file_content, user_key_base64, max_age_seconds)
+      def verify_auth_file_with_token(file_content, user_key_base64, expected_token, expected_user_id)
+        payload = verify_auth_file(file_content, user_key_base64)
         return false if payload.nil?
 
         # Constant-time comparison
@@ -100,56 +92,6 @@ module MijAuth
         user_id_match = secure_compare(expected_user_id, payload[:user_id])
 
         token_match && user_id_match
-      end
-
-      # Generuje sekret TOTP Base32
-      #
-      # @param length [Integer]
-      # @return [String]
-      def generate_totp_secret(length = 32)
-        raise ArgumentError, 'Sekret TOTP musi mieć co najmniej 16 znaków' if length < 16
-
-        alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-        bytes = SecureRandom.random_bytes(length).bytes
-        bytes.map { |b| alphabet[b % 32] }.join
-      end
-
-      # Tworzy URI otpauth do parowania aplikacji
-      #
-      # @return [String]
-      def get_totp_provisioning_uri(account_name, issuer, secret, digits: 6, period: 30)
-        label = URI.encode_www_form_component("#{issuer}:#{account_name}")
-        query = URI.encode_www_form(
-          secret: secret.upcase,
-          issuer: issuer,
-          algorithm: 'SHA1',
-          digits: digits,
-          period: period
-        )
-
-        "otpauth://totp/#{label}?#{query}"
-      end
-
-      # Generuje kod TOTP
-      #
-      # @return [String]
-      def generate_totp_code(secret, timestamp = Time.now.to_i, period: 30, digits: 6)
-        counter = timestamp / period
-        generate_hotp_code(secret, counter, digits)
-      end
-
-      # Weryfikuje kod TOTP
-      #
-      # @return [Boolean]
-      def verify_totp(secret, code, discrepancy: 1, timestamp: Time.now.to_i, period: 30, digits: 6)
-        normalized_code = code.to_s.gsub(/\s+/, '')
-        return false unless normalized_code.match?(/^\d{#{digits}}$/)
-
-        counter = timestamp / period
-        (-discrepancy..discrepancy).any? do |offset|
-          candidate = generate_hotp_code(secret, counter + offset, digits)
-          secure_compare(candidate, normalized_code)
-        end
       end
 
       # Weryfikuje plik, token i hash urządzenia (v1/v2)
@@ -288,44 +230,6 @@ module MijAuth
 
         normalized
       end
-
-      def generate_hotp_code(secret, counter, digits)
-        return '0' * digits if counter.negative?
-
-        normalized = secret.to_s.gsub(/\s+|=/, '').upcase
-        key = Base32.decode(normalized)
-        raise ArgumentError, 'Nieprawidłowy sekret TOTP' if key.empty?
-
-        counter_bin = [counter >> 32, counter & 0xffffffff].pack('N2')
-        hash = OpenSSL::HMAC.digest('sha1', key, counter_bin)
-        offset = hash.bytes.last & 0x0f
-        binary = (
-          ((hash.getbyte(offset) & 0x7f) << 24) |
-          ((hash.getbyte(offset + 1) & 0xff) << 16) |
-          ((hash.getbyte(offset + 2) & 0xff) << 8) |
-          (hash.getbyte(offset + 3) & 0xff)
-        )
-
-        (binary % (10**digits)).to_s.rjust(digits, '0')
-      end
-    end
-  end
-
-  module Base32
-    ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'.freeze
-    LOOKUP = ALPHABET.chars.each_with_index.to_h.freeze
-
-    module_function
-
-    def decode(value)
-      bits = value.chars.map do |char|
-        idx = LOOKUP[char]
-        return ''.b if idx.nil?
-        idx.to_s(2).rjust(5, '0')
-      end.join
-
-      bytes = bits.scan(/.{8}/).map { |byte| byte.to_i(2).chr }
-      bytes.join.b
     end
   end
 
@@ -358,7 +262,6 @@ module MijAuth
         password_hash: password_hash,
         encryption_key: user_key,
         auth_token: result[:token],
-          totp_secret: Auth.generate_totp_secret,
         created_at: Time.now.utc.iso8601
       }
 

@@ -30,7 +30,6 @@ class Program
         Console.WriteLine($"✓ Utworzono użytkownika: {email}");
         Console.WriteLine($"✓ ID użytkownika: {userId}");
         Console.WriteLine("✓ Wygenerowano plik .mijauth");
-        Console.WriteLine("✓ Włączono kod 2FA z aplikacji (TOTP)");
 
         // Zapisz plik do pobrania
         var authFileName = $"auth_{userId}.mijauth";
@@ -87,35 +86,9 @@ class Program
         }
 
         // ========================================
-        // KROK 4: Logowanie - krok 3 (kod z aplikacji 2FA)
+        // KROK 4: Regeneracja pliku (opcjonalnie)
         // ========================================
-        Console.WriteLine("4. LOGOWANIE - ETAP 3 (KOD Z APLIKACJI 2FA)");
-        Console.WriteLine(new string('-', 50));
-
-        var provisioningUri = MijAuthService.GetTotpProvisioningUri(
-            foundUser.Email,
-            "MijAuth Demo",
-            foundUser.TotpSecret
-        );
-
-        var appCode = MijAuthService.GenerateTotpCode(foundUser.TotpSecret);
-        var isTotpValid = MijAuthService.VerifyTotp(foundUser.TotpSecret, appCode, 1);
-
-        if (isTotpValid)
-        {
-            Console.WriteLine("✓ Kod TOTP poprawny");
-            Console.WriteLine($"✓ URI do sparowania aplikacji: {provisioningUri}\n");
-        }
-        else
-        {
-            Console.WriteLine("✗ Nieprawidłowy kod TOTP");
-            return;
-        }
-
-        // ========================================
-        // KROK 5: Regeneracja pliku (opcjonalnie)
-        // ========================================
-        Console.WriteLine("5. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)");
+        Console.WriteLine("4. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)");
         Console.WriteLine(new string('-', 50));
 
         var (newFileContent, newToken) = MijAuthService.RegenerateAuthFile(userId, foundUser.EncryptionKey);
@@ -128,7 +101,7 @@ class Program
         Console.WriteLine("✓ Stary plik został unieważniony\n");
 
         // Test starego pliku (powinien być odrzucony)
-        Console.WriteLine("6. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)");
+        Console.WriteLine("5. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)");
         Console.WriteLine(new string('-', 50));
 
         foundUser = db.GetUser(userId)!; // Odśwież dane
@@ -149,7 +122,7 @@ class Program
         }
 
         // Test nowego pliku
-        Console.WriteLine("7. TEST NOWEGO PLIKU");
+        Console.WriteLine("6. TEST NOWEGO PLIKU");
         Console.WriteLine(new string('-', 50));
 
         var newUploadedContent = File.ReadAllText(newAuthFileName);
@@ -172,7 +145,7 @@ class Program
         // ========================================
         // Podgląd odszyfrowanej zawartości
         // ========================================
-        Console.WriteLine("8. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU");
+        Console.WriteLine("7. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU");
         Console.WriteLine(new string('-', 50));
 
         var decryptedData = MijAuthService.VerifyAuthFile(newUploadedContent, foundUser.EncryptionKey);

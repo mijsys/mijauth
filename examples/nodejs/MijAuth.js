@@ -14,7 +14,6 @@ class MijAuth {
     static IV_LENGTH = 12;  // 96 bits dla GCM
     static TAG_LENGTH = 16; // 128 bits
     static VERSION = 1;
-    static DEFAULT_AUTH_FILE_TTL_SECONDS = 30 * 24 * 60 * 60;
 
     /**
      * Generuje nowy klucz AES-256 dla użytkownika
@@ -69,7 +68,7 @@ class MijAuth {
      * @param {string} userKeyBase64 - Klucz użytkownika w base64
      * @returns {object|null} Dane użytkownika lub null
      */
-    static verifyAuthFile(fileContent, userKeyBase64, maxAgeSeconds = this.DEFAULT_AUTH_FILE_TTL_SECONDS) {
+    static verifyAuthFile(fileContent, userKeyBase64) {
         try {
             const decrypted = this.decrypt(fileContent, userKeyBase64);
             
@@ -81,10 +80,6 @@ class MijAuth {
             
             // Walidacja struktury
             if (!payload.user_id || !payload.token || !payload.version) {
-                return null;
-            }
-
-            if (!this.isAuthFileWithinTtl(payload, maxAgeSeconds)) {
                 return null;
             }
 
@@ -103,14 +98,8 @@ class MijAuth {
      * @param {string} expectedUserId - Oczekiwane ID użytkownika
      * @returns {boolean}
      */
-    static verifyAuthFileWithToken(
-        fileContent,
-        userKeyBase64,
-        expectedToken,
-        expectedUserId,
-        maxAgeSeconds = this.DEFAULT_AUTH_FILE_TTL_SECONDS
-    ) {
-        const payload = this.verifyAuthFile(fileContent, userKeyBase64, maxAgeSeconds);
+    static verifyAuthFileWithToken(fileContent, userKeyBase64, expectedToken, expectedUserId) {
+        const payload = this.verifyAuthFile(fileContent, userKeyBase64);
         
         if (payload === null) {
             return false;
@@ -273,8 +262,7 @@ class MijAuth {
     static generateDeviceHash(headers) {
         const data = {
             user_agent: headers['user-agent'] || '',
-            accept_language: headers['accept-language'] || '',
-            device_id: headers['x-mijauth-device-id'] || ''
+            accept_language: headers['accept-language'] || ''
         };
 
         return crypto.createHash('sha256')
@@ -312,115 +300,6 @@ class MijAuth {
             });
         return normalized;
     }
-
-    static generateTotpSecret(length = 32) {
-        if (length < 16) {
-            throw new Error('TOTP secret must have at least 16 Base32 chars');
-        }
-        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-        const bytes = crypto.randomBytes(length);
-        let secret = '';
-        for (let i = 0; i < length; i++) {
-            secret += alphabet[bytes[i] % 32];
-        }
-        return secret;
-    }
-
-    static getTotpProvisioningUri(accountName, issuer, secret, digits = 6, period = 30) {
-        const label = encodeURIComponent(`${issuer}:${accountName}`);
-        const query = new URLSearchParams({
-            secret: secret.toUpperCase(),
-            issuer,
-            algorithm: 'SHA1',
-            digits: String(digits),
-            period: String(period)
-        }).toString();
-        return `otpauth://totp/${label}?${query}`;
-    }
-
-    static generateTotpCode(secret, timestamp = Date.now(), period = 30, digits = 6) {
-        const counter = Math.floor(timestamp / 1000 / period);
-        return this.generateHotpCode(secret, counter, digits);
-    }
-
-    static verifyTotp(secret, code, discrepancy = 1, timestamp = Date.now(), period = 30, digits = 6) {
-        const normalizedCode = String(code).replace(/\s+/g, '');
-        if (!new RegExp(`^\\d{${digits}}$`).test(normalizedCode)) {
-            return false;
-        }
-
-        const counter = Math.floor(timestamp / 1000 / period);
-        for (let offset = -discrepancy; offset <= discrepancy; offset++) {
-            const candidate = this.generateHotpCode(secret, counter + offset, digits);
-            if (crypto.timingSafeEqual(Buffer.from(candidate), Buffer.from(normalizedCode))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    static generateHotpCode(secret, counter, digits = 6) {
-        if (counter < 0) {
-            return '0'.repeat(digits);
-        }
-        const secretBuffer = this.base32Decode(secret);
-        if (!secretBuffer || secretBuffer.length === 0) {
-            throw new Error('Invalid TOTP secret');
-        }
-
-        const counterBuffer = Buffer.alloc(8);
-        counterBuffer.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
-        counterBuffer.writeUInt32BE(counter >>> 0, 4);
-
-        const hash = crypto.createHmac('sha1', secretBuffer).update(counterBuffer).digest();
-        const offset = hash[hash.length - 1] & 0x0f;
-        const binary =
-            ((hash[offset] & 0x7f) << 24) |
-            ((hash[offset + 1] & 0xff) << 16) |
-            ((hash[offset + 2] & 0xff) << 8) |
-            (hash[offset + 3] & 0xff);
-
-        return String(binary % (10 ** digits)).padStart(digits, '0');
-    }
-
-    static base32Decode(secret) {
-        const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-        const map = new Map(alphabet.split('').map((char, idx) => [char, idx]));
-        const normalized = String(secret).toUpperCase().replace(/=|\s+/g, '');
-        let bits = '';
-
-        for (const char of normalized) {
-            if (!map.has(char)) {
-                return Buffer.alloc(0);
-            }
-            bits += map.get(char).toString(2).padStart(5, '0');
-        }
-
-        const bytes = [];
-        for (let i = 0; i + 8 <= bits.length; i += 8) {
-            bytes.push(parseInt(bits.slice(i, i + 8), 2));
-        }
-
-        return Buffer.from(bytes);
-    }
-
-    static isAuthFileWithinTtl(payload, maxAgeSeconds) {
-        if (maxAgeSeconds === null || maxAgeSeconds === undefined) {
-            return true;
-        }
-
-        const createdAt = Date.parse(payload.created_at || '');
-        if (Number.isNaN(createdAt)) {
-            return false;
-        }
-
-        const now = Date.now();
-        if (createdAt > now) {
-            return false;
-        }
-
-        return (now - createdAt) <= maxAgeSeconds * 1000;
-    }
 }
 
 /**
@@ -451,7 +330,6 @@ class UserDatabase {
     async createUser(userId, email, password) {
         const userKey = MijAuth.generateUserKey();
         const authResult = MijAuth.createAuthFile(userId, userKey);
-        const totpSecret = MijAuth.generateTotpSecret();
 
         // Hashowanie hasła (prosty przykład - w produkcji użyj bcrypt/argon2)
         const passwordHash = crypto.createHash('sha256')
@@ -464,7 +342,6 @@ class UserDatabase {
             password_hash: passwordHash,
             encryption_key: userKey,
             auth_token: authResult.token,
-            totp_secret: totpSecret,
             created_at: new Date().toISOString()
         };
 

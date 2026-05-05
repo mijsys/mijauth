@@ -23,11 +23,6 @@ class AuthManager
 {
     private UserStorageInterface $storage;
     private AttemptLoggerInterface $attemptLogger;
-    private ?int $authFileTtlSeconds = 2592000;
-    private int $totpMaxAttempts = 3;
-    private int $totpLockoutSeconds = 900;
-    /** @var array<string, array{count: int, locked_until: int}> */
-    private array $totpFailures = [];
 
     /**
      * @param UserStorageInterface|null $storage User storage implementation
@@ -144,16 +139,14 @@ class AuthManager
                 $user['auth_token'],
                 $user['id'],
                 $deviceHash,
-                $deviceHashV2,
-                $this->authFileTtlSeconds
+                $deviceHashV2
             );
         } else {
             $result = MijAuth::verifyAuthFileWithToken(
                 $fileContent,
                 $user['encryption_key'],
                 $user['auth_token'],
-                $user['id'],
-                $this->authFileTtlSeconds
+                $user['id']
             );
         }
 
@@ -163,155 +156,6 @@ class AuthManager
         ]);
 
         return $result;
-    }
-
-    /**
-     * Configure max auth file age (seconds). Set <= 0 to disable TTL checks.
-     *
-     * @param int $ttlSeconds
-     * @return void
-     */
-    public function setAuthFileTtlSeconds(int $ttlSeconds): void
-    {
-        $this->authFileTtlSeconds = $ttlSeconds > 0 ? $ttlSeconds : null;
-    }
-
-    /**
-     * Configure in-memory TOTP rate limiting.
-     *
-     * @param int $maxAttempts
-     * @param int $lockoutSeconds
-     * @return void
-     */
-    public function configureTotpRateLimit(int $maxAttempts = 3, int $lockoutSeconds = 900): void
-    {
-        $this->totpMaxAttempts = max(1, $maxAttempts);
-        $this->totpLockoutSeconds = max(30, $lockoutSeconds);
-    }
-
-    /**
-     * Enable app-based TOTP for user.
-     *
-     * @param string $userId
-     * @param string $accountName
-     * @param string $issuer
-     * @return array{secret: string, provisioning_uri: string, qr_code_url: string}|null
-     */
-    public function enableTotpForUser(string $userId, string $accountName, string $issuer): ?array
-    {
-        $user = $this->storage->findById($userId);
-
-        if ($user === null) {
-            return null;
-        }
-
-        $secret = MijAuth::generateTotpSecret();
-        $provisioningUri = MijAuth::getTotpProvisioningUri($accountName, $issuer, $secret);
-
-        $user['totp_secret'] = $secret;
-        $user['totp_enabled_at'] = date('c');
-        $this->storage->save($userId, $user);
-
-        return [
-            'secret' => $secret,
-            'provisioning_uri' => $provisioningUri,
-            'qr_code_url' => MijAuth::getTotpQrCodeUrl($provisioningUri)
-        ];
-    }
-
-    /**
-     * Verify TOTP code with built-in attempt throttling.
-     *
-     * @param string $userId
-     * @param string $code
-     * @param int $discrepancy
-     * @return bool
-     */
-    public function verifyTotpForUser(string $userId, string $code, int $discrepancy = 1): bool
-    {
-        $user = $this->storage->findById($userId);
-
-        if ($user === null || !isset($user['totp_secret'])) {
-            $this->logAttempt('totp_verification', false, [
-                'user_id' => $userId,
-                'reason' => 'user_or_secret_missing'
-            ]);
-            return false;
-        }
-
-        if ($this->isTotpLocked($userId)) {
-            $this->logAttempt('totp_verification', false, [
-                'user_id' => $userId,
-                'reason' => 'rate_limited'
-            ]);
-            return false;
-        }
-
-        $valid = MijAuth::verifyTotp((string) $user['totp_secret'], $code, $discrepancy);
-
-        if ($valid) {
-            $this->clearTotpRateLimit($userId);
-            $this->logAttempt('totp_verification', true, [
-                'user_id' => $userId
-            ]);
-            return true;
-        }
-
-        $this->registerTotpFailure($userId);
-        $this->logAttempt('totp_verification', false, [
-            'user_id' => $userId,
-            'reason' => 'invalid_code'
-        ]);
-
-        return false;
-    }
-
-    /**
-     * Verify password + auth file + TOTP code.
-     *
-     * @param string $email
-     * @param string $password
-     * @param string $authFileContent
-     * @param string $totpCode
-     * @return array|null
-     */
-    public function loginWithTotp(
-        string $email,
-        string $password,
-        string $authFileContent,
-        string $totpCode
-    ): ?array {
-        $user = $this->login($email, $password, $authFileContent);
-
-        if ($user === null) {
-            return null;
-        }
-
-        if (!$this->verifyTotpForUser((string) $user['id'], $totpCode)) {
-            $this->logAttempt('login_with_totp', false, [
-                'email' => $email,
-                'user_id' => $user['id'] ?? null
-            ]);
-            return null;
-        }
-
-        $this->logAttempt('login_with_totp', true, [
-            'email' => $email,
-            'user_id' => $user['id'] ?? null
-        ]);
-
-        return $user;
-    }
-
-    /**
-     * Clear user lock state after successful authentication.
-     *
-     * @param string $userId
-     * @return void
-     */
-    public function clearTotpRateLimit(string $userId): void
-    {
-        unset($this->totpFailures[$userId]);
     }
 
     /**
@@ -439,39 +283,5 @@ class AuthManager
         ], $context);
 
         $this->attemptLogger->logAttempt($payload);
-    }
-
-    /**
-     * @param string $userId
-     * @return bool
-     */
-    private function isTotpLocked(string $userId): bool
-    {
-        if (!isset($this->totpFailures[$userId])) {
-            return false;
-        }
-
-        return $this->totpFailures[$userId]['locked_until'] > time();
-    }
-
-    /**
-     * @param string $userId
-     * @return void
-     */
-    private function registerTotpFailure(string $userId): void
-    {
-        $entry = $this->totpFailures[$userId] ?? [
-            'count' => 0,
-            'locked_until' => 0
-        ];
-
-        $entry['count']++;
-
-        if ($entry['count'] >= $this->totpMaxAttempts) {
-            $entry['count'] = 0;
-            $entry['locked_until'] = time() + $this->totpLockoutSeconds;
-        }
-
-        $this->totpFailures[$userId] = $entry;
     }
 }

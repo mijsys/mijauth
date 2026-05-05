@@ -9,9 +9,6 @@ import os
 import json
 import hashlib
 import secrets
-import hmac
-import base64
-import struct
 from datetime import datetime
 from base64 import b64encode, b64decode
 from typing import Optional, Tuple, Dict, Any
@@ -26,7 +23,6 @@ class MijAuth:
     IV_LENGTH = 12    # 96 bits dla GCM
     TAG_LENGTH = 16   # 128 bits (domyślnie w AESGCM)
     VERSION = 1
-    DEFAULT_AUTH_FILE_TTL_SECONDS = 30 * 24 * 60 * 60
 
     @staticmethod
     def generate_user_key() -> str:
@@ -86,8 +82,7 @@ class MijAuth:
     @staticmethod
     def verify_auth_file(
         file_content: str,
-        user_key_base64: str,
-        max_age_seconds: Optional[int] = DEFAULT_AUTH_FILE_TTL_SECONDS
+        user_key_base64: str
     ) -> Optional[Dict[str, Any]]:
         """
         Weryfikuje plik autoryzacyjny i zwraca dane użytkownika
@@ -111,9 +106,6 @@ class MijAuth:
             if not all(key in payload for key in ['user_id', 'token', 'version']):
                 return None
 
-            if not MijAuth._is_auth_file_within_ttl(payload, max_age_seconds):
-                return None
-
             return payload
         except Exception:
             return None
@@ -123,8 +115,7 @@ class MijAuth:
         file_content: str,
         user_key_base64: str,
         expected_token: str,
-        expected_user_id: str,
-        max_age_seconds: Optional[int] = DEFAULT_AUTH_FILE_TTL_SECONDS
+        expected_user_id: str
     ) -> bool:
         """
         Weryfikuje plik i sprawdza czy token zgadza się z przechowywanym
@@ -138,7 +129,7 @@ class MijAuth:
         Returns:
             True jeśli weryfikacja pomyślna
         """
-        payload = MijAuth.verify_auth_file(file_content, user_key_base64, max_age_seconds)
+        payload = MijAuth.verify_auth_file(file_content, user_key_base64)
         
         if payload is None:
             return False
@@ -274,65 +265,6 @@ class MijAuth:
         return hashlib.sha256(data.encode('utf-8')).hexdigest()
 
     @staticmethod
-    def generate_totp_secret(length: int = 32) -> str:
-        if length < 16:
-            raise ValueError('Sekret TOTP musi mieć co najmniej 16 znaków Base32')
-
-        alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-        random_bytes = secrets.token_bytes(length)
-        return ''.join(alphabet[b % 32] for b in random_bytes)
-
-    @staticmethod
-    def get_totp_provisioning_uri(
-        account_name: str,
-        issuer: str,
-        secret: str,
-        digits: int = 6,
-        period: int = 30
-    ) -> str:
-        import urllib.parse
-
-        label = urllib.parse.quote(f'{issuer}:{account_name}')
-        query = urllib.parse.urlencode({
-            'secret': secret.upper(),
-            'issuer': issuer,
-            'algorithm': 'SHA1',
-            'digits': digits,
-            'period': period
-        })
-        return f'otpauth://totp/{label}?{query}'
-
-    @staticmethod
-    def generate_totp_code(secret: str, timestamp: Optional[int] = None, period: int = 30, digits: int = 6) -> str:
-        ts = timestamp or int(datetime.utcnow().timestamp())
-        counter = ts // period
-        return MijAuth._generate_hotp_code(secret, counter, digits)
-
-    @staticmethod
-    def verify_totp(
-        secret: str,
-        code: str,
-        discrepancy: int = 1,
-        timestamp: Optional[int] = None,
-        period: int = 30,
-        digits: int = 6
-    ) -> bool:
-        normalized_code = ''.join(code.split())
-
-        if not normalized_code.isdigit() or len(normalized_code) != digits:
-            return False
-
-        ts = timestamp or int(datetime.utcnow().timestamp())
-        counter = ts // period
-
-        for offset in range(-discrepancy, discrepancy + 1):
-            candidate = MijAuth._generate_hotp_code(secret, counter + offset, digits)
-            if secrets.compare_digest(candidate, normalized_code):
-                return True
-
-        return False
-
-    @staticmethod
     def generate_device_hash_v2(context: Optional[Dict[str, Any]] = None) -> str:
         if context is None:
             context = {}
@@ -352,59 +284,6 @@ class MijAuth:
             else:
                 normalized[key] = value
         return dict(sorted(normalized.items()))
-
-    @staticmethod
-    def _generate_hotp_code(secret: str, counter: int, digits: int = 6) -> str:
-        if counter < 0:
-            return '0' * digits
-
-        secret_bytes = MijAuth._base32_decode(secret)
-        if not secret_bytes:
-            raise ValueError('Nieprawidłowy sekret TOTP')
-
-        counter_bytes = struct.pack('>Q', counter)
-        digest = hmac.new(secret_bytes, counter_bytes, hashlib.sha1).digest()
-        offset = digest[-1] & 0x0F
-
-        binary = (
-            ((digest[offset] & 0x7F) << 24)
-            | ((digest[offset + 1] & 0xFF) << 16)
-            | ((digest[offset + 2] & 0xFF) << 8)
-            | (digest[offset + 3] & 0xFF)
-        )
-
-        otp = binary % (10 ** digits)
-        return str(otp).zfill(digits)
-
-    @staticmethod
-    def _base32_decode(secret: str) -> bytes:
-        normalized = ''.join(secret.split()).upper().replace('=', '')
-        padding = '=' * ((8 - len(normalized) % 8) % 8)
-
-        try:
-            return base64.b32decode(normalized + padding, casefold=True)
-        except Exception:
-            return b''
-
-    @staticmethod
-    def _is_auth_file_within_ttl(payload: Dict[str, Any], max_age_seconds: Optional[int]) -> bool:
-        if max_age_seconds is None:
-            return True
-
-        created_at = payload.get('created_at')
-        if not isinstance(created_at, str):
-            return False
-
-        try:
-            ts = datetime.fromisoformat(created_at.replace('Z', '+00:00')).timestamp()
-        except ValueError:
-            return False
-
-        now = datetime.utcnow().timestamp()
-        if ts > now:
-            return False
-
-        return (now - ts) <= max_age_seconds
 
 
 class UserDatabase:
@@ -440,7 +319,6 @@ class UserDatabase:
         """
         user_key = MijAuth.generate_user_key()
         file_content, token = MijAuth.create_auth_file(user_id, user_key)
-        totp_secret = MijAuth.generate_totp_secret()
 
         # Hash hasła (w produkcji użyj bcrypt lub argon2)
         password_hash = hashlib.sha256(
@@ -453,7 +331,6 @@ class UserDatabase:
             'password_hash': password_hash,
             'encryption_key': user_key,
             'auth_token': token,
-            'totp_secret': totp_secret,
             'created_at': datetime.utcnow().isoformat() + 'Z'
         }
 

@@ -13,7 +13,6 @@ class MijAuth
     private const IV_LENGTH = 12;  // 96 bits dla GCM
     private const TAG_LENGTH = 16; // 128 bits
     private const VERSION = 1;
-    private const DEFAULT_AUTH_FILE_TTL_SECONDS = 2592000;
 
     /**
      * Generuje nowy klucz AES-256 dla użytkownika
@@ -77,8 +76,7 @@ class MijAuth
      */
     public static function verifyAuthFile(
         string $fileContent,
-        string $userKeyBase64,
-        ?int $maxAgeSeconds = self::DEFAULT_AUTH_FILE_TTL_SECONDS
+        string $userKeyBase64
     ): ?array {
         try {
             $decrypted = self::decrypt($fileContent, $userKeyBase64);
@@ -91,10 +89,6 @@ class MijAuth
             
             // Walidacja struktury
             if (!isset($payload['user_id'], $payload['token'], $payload['version'])) {
-                return null;
-            }
-
-            if (!self::isAuthFileWithinTtl($payload, $maxAgeSeconds)) {
                 return null;
             }
 
@@ -117,10 +111,9 @@ class MijAuth
         string $fileContent,
         string $userKeyBase64,
         string $expectedToken,
-        string $expectedUserId,
-        ?int $maxAgeSeconds = self::DEFAULT_AUTH_FILE_TTL_SECONDS
+        string $expectedUserId
     ): bool {
-        $payload = self::verifyAuthFile($fileContent, $userKeyBase64, $maxAgeSeconds);
+        $payload = self::verifyAuthFile($fileContent, $userKeyBase64);
         
         if ($payload === null) {
             return false;
@@ -273,7 +266,7 @@ class MijAuth
         $data = [
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
             'accept_language' => $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '',
-            'device_id' => $_COOKIE['mijauth_device_id'] ?? ''
+            // Możesz dodać więcej fingerprinting
         ];
 
         return hash('sha256', json_encode($data));
@@ -321,127 +314,6 @@ class MijAuth
 
         return $normalized;
     }
-
-    public static function generateTotpSecret(int $length = 32): string
-    {
-        if ($length < 16) {
-            throw new \RuntimeException('Sekret TOTP musi mieć co najmniej 16 znaków Base32');
-        }
-
-        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-        $secret = '';
-        $bytes = random_bytes($length);
-
-        for ($i = 0; $i < $length; $i++) {
-            $secret .= $alphabet[ord($bytes[$i]) % 32];
-        }
-
-        return $secret;
-    }
-
-    public static function getTotpProvisioningUri(
-        string $accountName,
-        string $issuer,
-        string $secret,
-        int $digits = 6,
-        int $period = 30
-    ): string {
-        $label = rawurlencode($issuer . ':' . $accountName);
-        $query = http_build_query([
-            'secret' => strtoupper($secret),
-            'issuer' => $issuer,
-            'algorithm' => 'SHA1',
-            'digits' => $digits,
-            'period' => $period
-        ]);
-
-        return 'otpauth://totp/' . $label . '?' . $query;
-    }
-
-    public static function verifyTotp(string $secret, string $code, int $discrepancy = 1): bool
-    {
-        $normalizedCode = preg_replace('/\s+/', '', $code) ?? '';
-
-        if (!preg_match('/^\d{6}$/', $normalizedCode)) {
-            return false;
-        }
-
-        $counter = intdiv(time(), 30);
-        for ($offset = -$discrepancy; $offset <= $discrepancy; $offset++) {
-            $candidate = self::generateHotpCode($secret, $counter + $offset);
-            if (hash_equals($candidate, $normalizedCode)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    public static function generateTotpCode(string $secret): string
-    {
-        return self::generateHotpCode($secret, intdiv(time(), 30));
-    }
-
-    private static function generateHotpCode(string $secret, int $counter): string
-    {
-        if ($counter < 0) {
-            return '000000';
-        }
-
-        $secretBinary = self::base32Decode($secret);
-        $counterBinary = pack('N*', 0, $counter);
-        $hash = hash_hmac('sha1', $counterBinary, $secretBinary, true);
-
-        $offset = ord(substr($hash, -1)) & 0x0F;
-        $binary = (
-            ((ord($hash[$offset]) & 0x7F) << 24)
-            | ((ord($hash[$offset + 1]) & 0xFF) << 16)
-            | ((ord($hash[$offset + 2]) & 0xFF) << 8)
-            | (ord($hash[$offset + 3]) & 0xFF)
-        );
-
-        return str_pad((string) ($binary % 1000000), 6, '0', STR_PAD_LEFT);
-    }
-
-    private static function base32Decode(string $secret): string
-    {
-        $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-        $lookup = array_flip(str_split($alphabet));
-        $normalized = strtoupper(str_replace('=', '', preg_replace('/\s+/', '', $secret) ?? ''));
-
-        $bits = '';
-        foreach (str_split($normalized) as $char) {
-            if (!isset($lookup[$char])) {
-                return '';
-            }
-            $bits .= str_pad(decbin($lookup[$char]), 5, '0', STR_PAD_LEFT);
-        }
-
-        $decoded = '';
-        for ($i = 0; $i + 8 <= strlen($bits); $i += 8) {
-            $decoded .= chr(bindec(substr($bits, $i, 8)));
-        }
-
-        return $decoded;
-    }
-
-    private static function isAuthFileWithinTtl(array $payload, ?int $maxAgeSeconds): bool
-    {
-        if ($maxAgeSeconds === null) {
-            return true;
-        }
-
-        if (!isset($payload['created_at']) || !is_string($payload['created_at'])) {
-            return false;
-        }
-
-        $createdAt = strtotime($payload['created_at']);
-        if ($createdAt === false || $createdAt > time()) {
-            return false;
-        }
-
-        return (time() - $createdAt) <= $maxAgeSeconds;
-    }
 }
 
 /**
@@ -474,7 +346,6 @@ class UserDatabase
     {
         $userKey = MijAuth::generateUserKey();
         $authResult = MijAuth::createAuthFile($userId, $userKey);
-        $totpSecret = MijAuth::generateTotpSecret();
 
         $this->users[$userId] = [
             'id' => $userId,
@@ -482,7 +353,6 @@ class UserDatabase
             'password_hash' => $passwordHash,
             'encryption_key' => $userKey,
             'auth_token' => $authResult['token'],
-            'totp_secret' => $totpSecret,
             'created_at' => date('c')
         ];
 

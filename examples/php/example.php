@@ -27,7 +27,6 @@ $authFileContent = $result['auth_file'];
 echo "✓ Utworzono użytkownika: $email\n";
 echo "✓ ID użytkownika: $userId\n";
 echo "✓ Wygenerowano plik .mijauth\n";
-echo "✓ Włączono kod 2FA z aplikacji (TOTP)\n";
 
 // Zapisz plik do pobrania
 $authFileName = "auth_{$userId}.mijauth";
@@ -78,34 +77,9 @@ if ($isValid) {
 }
 
 // ========================================
-// KROK 4: Logowanie - krok 3 (kod z aplikacji 2FA)
+// KROK 4: Regeneracja pliku (opcjonalnie)
 // ========================================
-echo "4. LOGOWANIE - ETAP 3 (KOD Z APLIKACJI 2FA)\n";
-echo str_repeat("-", 50) . "\n";
-
-$totpProvisioningUri = MijAuth::getTotpProvisioningUri(
-    $user['email'],
-    'MijAuth Demo',
-    $user['totp_secret']
-);
-
-// Symulacja wpisania kodu przez użytkownika (w realnej aplikacji kod wpisuje user).
-$totpCode = MijAuth::generateTotpCode($user['totp_secret']);
-
-$isTotpValid = MijAuth::verifyTotp($user['totp_secret'], $totpCode, 1);
-
-if ($isTotpValid) {
-    echo "✓ Kod TOTP poprawny\n";
-    echo "✓ URI do sparowania aplikacji: $totpProvisioningUri\n\n";
-} else {
-    echo "✗ Nieprawidłowy kod TOTP\n";
-    exit(1);
-}
-
-// ========================================
-// KROK 5: Regeneracja pliku (opcjonalnie)
-// ========================================
-echo "5. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)\n";
+echo "4. REGENERACJA PLIKU (UNIEWAŻNIENIE STAREGO)\n";
 echo str_repeat("-", 50) . "\n";
 
 $newAuthResult = MijAuth::regenerateAuthFile($userId, $user['encryption_key']);
@@ -118,7 +92,7 @@ echo "✓ Wygenerowano nowy plik: $newAuthFileName\n";
 echo "✓ Stary plik został unieważniony\n\n";
 
 // Test starego pliku (powinien być odrzucony)
-echo "6. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)\n";
+echo "5. TEST STAREGO PLIKU (POWINIEN BYĆ ODRZUCONY)\n";
 echo str_repeat("-", 50) . "\n";
 
 $user = $db->getUser($userId); // Odśwież dane
@@ -136,7 +110,7 @@ if (!$isOldValid) {
 }
 
 // Test nowego pliku
-echo "7. TEST NOWEGO PLIKU\n";
+echo "6. TEST NOWEGO PLIKU\n";
 echo str_repeat("-", 50) . "\n";
 
 $newFileContent = file_get_contents($newAuthFileName);
@@ -156,7 +130,7 @@ if ($isNewValid) {
 // ========================================
 // Podgląd odszyfrowanej zawartości
 // ========================================
-echo "8. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU\n";
+echo "7. PODGLĄD ODSZYFROWANEJ ZAWARTOŚCI PLIKU\n";
 echo str_repeat("-", 50) . "\n";
 
 $decryptedData = MijAuth::verifyAuthFile($newFileContent, $user['encryption_key']);
